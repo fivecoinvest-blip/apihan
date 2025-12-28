@@ -33,7 +33,9 @@ try {
 
 // Launch game - Use database user ID as string for SoftAPI
 $userId = (string)$_SESSION['user_id'];
-setUserBalance($userId, $balance);
+
+// Log current balance before game launch
+error_log("Launching game for user {$userId} with balance: {$balance}");
 
 $params = createGameLaunchRequest(
     userId: $userId,
