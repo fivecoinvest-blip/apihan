@@ -256,12 +256,12 @@ $transactions = $pdo->query("
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; 
-            background: #fafafa; 
-            color: #1a1a1a;
+            background: #0b1120; 
+            color: #e5e7eb;
         }
         .header { 
-            background: white; 
-            border-bottom: 1px solid #e5e7eb;
+            background: #1a1f36; 
+            border-bottom: 1px solid #2d3548;
             padding: 16px 24px; 
             display: flex; 
             justify-content: space-between; 
@@ -270,23 +270,23 @@ $transactions = $pdo->query("
         .header h1 { 
             font-size: 20px; 
             font-weight: 600;
-            color: #1a1a1a;
+            color: #ffffff;
         }
         .header a { 
-            color: #6b7280; 
+            color: #9ca3af; 
             text-decoration: none; 
             padding: 8px 16px; 
-            border: 1px solid #e5e7eb;
+            border: 1px solid #2d3548;
             border-radius: 6px;
             font-size: 14px;
             transition: all 0.2s;
         }
-        .header a:hover { background: #f9fafb; }
+        .header a:hover { background: #2d3548; color: #fff; }
         .container { max-width: 1400px; margin: 24px auto; padding: 0 24px; }
         .success { 
-            background: #f0fdf4; 
-            border: 1px solid #86efac;
-            color: #166534; 
+            background: #064e3b; 
+            border: 1px solid #10b981;
+            color: #6ee7b7; 
             padding: 12px 16px; 
             border-radius: 8px; 
             margin-bottom: 20px;
@@ -299,13 +299,13 @@ $transactions = $pdo->query("
             margin-bottom: 24px; 
         }
         .stat-card { 
-            background: white; 
+            background: #1a1f36; 
             padding: 20px; 
             border-radius: 8px; 
-            border: 1px solid #e5e7eb;
+            border: 1px solid #2d3548;
         }
         .stat-card h3 { 
-            color: #6b7280; 
+            color: #9ca3af; 
             font-size: 13px; 
             font-weight: 500;
             margin-bottom: 8px;
@@ -315,7 +315,7 @@ $transactions = $pdo->query("
         .stat-card .number { 
             font-size: 28px; 
             font-weight: 600; 
-            color: #1a1a1a; 
+            color: #ffffff; 
         }
         .tabs { 
             display: flex; 
@@ -339,48 +339,50 @@ $transactions = $pdo->query("
             transition: all 0.2s;
             white-space: nowrap;
         }
-        .tab:hover { background: #f9fafb; }
+        .tab:hover { background: #2d3548; }
         .tab.active { 
-            background: #1a1a1a; 
+            background: #3b82f6; 
             color: white;
         }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
         .table-container { 
-            background: white; 
+            background: #1a1f36; 
             border-radius: 8px; 
-            border: 1px solid #e5e7eb;
+            border: 1px solid #2d3548;
             overflow: hidden;
         }
         .table-container h2 {
             padding: 20px 24px;
-            border-bottom: 1px solid #e5e7eb;
+            border-bottom: 1px solid #2d3548;
             font-size: 18px;
             font-weight: 600;
             margin: 0;
+            color: #ffffff;
         }
         table { 
             width: 100%; 
             border-collapse: collapse;
         }
         th { 
-            background: #fafafa; 
+            background: #0f1626; 
             padding: 12px 24px; 
             text-align: left; 
             font-weight: 500; 
-            color: #6b7280;
+            color: #9ca3af;
             font-size: 13px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            border-bottom: 1px solid #e5e7eb;
+            border-bottom: 1px solid #2d3548;
         }
         td { 
             padding: 16px 24px; 
-            border-bottom: 1px solid #f3f4f6;
+            border-bottom: 1px solid #2d3548;
             font-size: 14px;
+            color: #e5e7eb;
         }
         tr:last-child td { border-bottom: none; }
-        tr:hover { background: #fafafa; }
+        tr:hover { background: #2d3548; }
         .badge { 
             padding: 4px 10px; 
             border-radius: 6px; 
@@ -388,13 +390,13 @@ $transactions = $pdo->query("
             font-weight: 500;
             display: inline-block;
         }
-        .badge-success { background: #d1fae5; color: #065f46; }
-        .badge-danger { background: #fee2e2; color: #991b1b; }
-        .badge-warning { background: #fef3c7; color: #92400e; }
-        .badge-info { background: #dbeafe; color: #1e40af; }
+        .badge-success { background: #064e3b; color: #6ee7b7; border: 1px solid #10b981; }
+        .badge-danger { background: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; }
+        .badge-warning { background: #78350f; color: #fcd34d; border: 1px solid #f59e0b; }
+        .badge-info { background: #1e3a8a; color: #93c5fd; border: 1px solid #3b82f6; }
         .btn { 
             padding: 10px 18px; 
-            background: #1a1a1a; 
+            background: #3b82f6; 
             color: white; 
             border: none; 
             border-radius: 6px; 
@@ -405,7 +407,7 @@ $transactions = $pdo->query("
             display: inline-block;
             transition: all 0.2s;
         }
-        .btn:hover { background: #2a2a2a; }
+        .btn:hover { background: #2563eb; }
         .btn-small { padding: 6px 12px; font-size: 13px; }
         .btn-danger { background: #dc2626; }
         .btn-danger:hover { background: #b91c1c; }
@@ -416,36 +418,36 @@ $transactions = $pdo->query("
             padding: 24px;
         }
         .game-card { 
-            background: white; 
+            background: #1a1f36; 
             border-radius: 8px; 
             overflow: hidden;
-            border: 1px solid #e5e7eb;
+            border: 1px solid #2d3548;
             transition: all 0.2s;
         }
-        .game-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .game-card:hover { border-color: #3b82f6; transform: translateY(-2px); }
         .game-card.inactive { opacity: 0.5; }
         .game-image { 
             width: 100%; 
             height: 160px; 
             object-fit: cover; 
-            background: #f3f4f6;
+            background: #0f1626;
             display: flex; 
             align-items: center; 
             justify-content: center; 
-            color: #9ca3af; 
+            color: #4b5563; 
             font-size: 36px;
             font-weight: 600;
         }
         .game-image img { width: 100%; height: 100%; object-fit: cover; }
         .game-info { padding: 16px; }
         .game-info h3 { 
-            color: #1a1a1a; 
+            color: #ffffff; 
             margin-bottom: 8px;
             font-size: 16px;
             font-weight: 600;
         }
         .game-meta { 
-            color: #6b7280; 
+            color: #9ca3af; 
             font-size: 13px; 
             margin-bottom: 12px;
         }
@@ -454,8 +456,8 @@ $transactions = $pdo->query("
             gap: 8px; 
             flex-wrap: wrap;
             padding: 12px 16px;
-            background: #fafafa;
-            border-top: 1px solid #e5e7eb;
+            background: #0f1626;
+            border-top: 1px solid #2d3548;
         }
         .modal { 
             display: none; 
@@ -464,44 +466,48 @@ $transactions = $pdo->query("
             left: 0; 
             width: 100%; 
             height: 100%; 
-            background: rgba(0,0,0,0.5); 
+            background: rgba(0,0,0,0.8); 
             z-index: 1000; 
             overflow-y: auto;
         }
         .modal-content { 
-            background: white; 
+            background: #1a1f36; 
             max-width: 600px; 
             margin: 50px auto; 
             padding: 24px; 
             border-radius: 12px;
+            border: 1px solid #2d3548;
         }
         .modal-content h2 {
             font-size: 20px;
             font-weight: 600;
             margin-bottom: 20px;
+            color: #ffffff;
         }
         .form-group { margin-bottom: 16px; }
         .form-group label { 
             display: block; 
             margin-bottom: 6px; 
-            color: #374151; 
+            color: #e5e7eb; 
             font-weight: 500;
             font-size: 14px;
         }
         .form-group input, .form-group select, .form-group textarea { 
             width: 100%; 
             padding: 10px 12px; 
-            border: 1px solid #d1d5db; 
+            border: 1px solid #2d3548; 
             border-radius: 6px; 
             font-size: 14px;
             font-family: inherit;
+            background: #0f1626;
+            color: #e5e7eb;
         }
         .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
             outline: none;
-            border-color: #1a1a1a;
+            border-color: #3b82f6;
         }
         .form-group input[type="checkbox"] { width: auto; }
-        .form-group small { color: #6b7280; font-size: 13px; }
+        .form-group small { color: #9ca3af; font-size: 13px; }
         .close { 
             float: right; 
             font-size: 24px; 
@@ -509,7 +515,7 @@ $transactions = $pdo->query("
             color: #9ca3af;
             line-height: 1;
         }
-        .close:hover { color: #1a1a1a; }
+        .close:hover { color: #ffffff; }
         @media (max-width: 768px) {
             .game-grid { grid-template-columns: 1fr; }
             .stats { grid-template-columns: 1fr; }
