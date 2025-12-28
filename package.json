@@ -1,0 +1,42 @@
+{
+  "name": "softapi-gaming-integration",
+  "version": "1.0.0",
+  "description": "Complete PHP implementation for SoftAPI gaming platform integration",
+  "main": "launch_game.php",
+  "scripts": {
+    "test": "php example_launch.php"
+  },
+  "keywords": [
+    "gaming",
+    "api",
+    "softapi",
+    "jili",
+    "casino",
+    "integration",
+    "encryption"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/softapi-gaming-integration.git"
+  },
+  "requirements": {
+    "php": ">=7.4",
+    "extensions": [
+      "openssl",
+      "curl",
+      "json",
+      "pdo_mysql"
+    ]
+  },
+  "files": [
+    "config.php",
+    "helpers.php",
+    "launch_game.php",
+    "callback.php",
+    "example_launch.php",
+    "database_schema.sql",
+    "README.md"
+  ]
+}

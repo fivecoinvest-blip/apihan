@@ -1,0 +1,1219 @@
+<?php
+/**
+ * Admin Panel - Game Management
+ */
+session_start();
+require_once 'config.php';
+require_once 'db_helper.php';
+require_once 'currency_helper.php';
+require_once 'settings_helper.php';
+
+// Get database connection
+$db = Database::getInstance();
+$pdo = $db->getConnection();
+
+// Handle login
+if (isset($_POST['admin_login'])) {
+    $username = $_POST['username'];
+    $password = $_POST['password'];
+    
+    $stmt = $pdo->prepare("SELECT * FROM admin_users WHERE username = ? AND is_active = 1");
+    $stmt->execute([$username]);
+    $admin = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($admin && password_verify($password, $admin['password'])) {
+        $_SESSION['admin_logged_in'] = true;
+        $_SESSION['admin_id'] = $admin['id'];
+        $_SESSION['admin_username'] = $admin['username'];
+        $_SESSION['admin_role'] = $admin['role'];
+        
+        // Update last login
+        $pdo->prepare("UPDATE admin_users SET last_login = NOW() WHERE id = ?")->execute([$admin['id']]);
+    } else {
+        $error = "Invalid username or password";
+    }
+}
+
+// Check if admin is logged in
+if (!isset($_SESSION['admin_logged_in'])) {
+    ?>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Admin Login</title>
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+            .login-box { background: white; padding: 40px; border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); width: 90%; max-width: 400px; }
+            h1 { text-align: center; color: #667eea; margin-bottom: 30px; }
+            input { width: 100%; padding: 15px; border: 2px solid #ddd; border-radius: 10px; font-size: 16px; margin-bottom: 20px; }
+            button { width: 100%; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; }
+            .error { color: red; text-align: center; margin-bottom: 15px; }
+        </style>
+    </head>
+    <body>
+        <div class="login-box">
+            <h1>🔐 Admin Login</h1>
+            <?php if (isset($error)) echo "<p class='error'>$error</p>"; ?>
+            <form method="POST">
+                <input type="text" name="username" placeholder="Username" required autofocus>
+                <input type="password" name="password" placeholder="Password" required>
+                <button type="submit" name="admin_login">Login</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    <?php
+    exit;
+}
+
+// Get database connection
+$db = Database::getInstance();
+$pdo = $db->getConnection();
+
+// Handle file upload
+if (isset($_POST['upload_image']) && isset($_FILES['game_image'])) {
+    $gameId = $_POST['game_id'];
+    $file = $_FILES['game_image'];
+    
+    if ($file['error'] === 0) {
+        $uploadDir = 'images/games/';
+        if (!file_exists($uploadDir)) {
+            mkdir($uploadDir, 0777, true);
+        }
+        
+        $extension = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $filename = 'game_' . $gameId . '_' . time() . '.' . $extension;
+        $uploadPath = $uploadDir . $filename;
+        
+        if (move_uploaded_file($file['tmp_name'], $uploadPath)) {
+            $stmt = $pdo->prepare("UPDATE games SET image = ? WHERE id = ?");
+            $stmt->execute([$uploadPath, $gameId]);
+            $success = "Image uploaded successfully!";
+        }
+    }
+}
+
+// Handle game update
+if (isset($_POST['update_game'])) {
+    $stmt = $pdo->prepare("UPDATE games SET name = ?, provider = ?, category = ?, is_active = ?, sort_order = ? WHERE id = ?");
+    $stmt->execute([
+        $_POST['name'],
+        $_POST['provider'],
+        $_POST['category'],
+        isset($_POST['is_active']) ? 1 : 0,
+        $_POST['sort_order'],
+        $_POST['game_id']
+    ]);
+    $success = "Game updated successfully!";
+}
+
+// Handle game delete
+if (isset($_GET['delete'])) {
+    $stmt = $pdo->prepare("DELETE FROM games WHERE id = ?");
+    $stmt->execute([$_GET['delete']]);
+    $success = "Game deleted successfully!";
+}
+
+// Handle add new game
+if (isset($_POST['add_game'])) {
+    try {
+        // Check if game_uid already exists
+        $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM games WHERE game_uid = ?");
+        $checkStmt->execute([$_POST['game_uid']]);
+        
+        if ($checkStmt->fetchColumn() > 0) {
+            $error = "Game UID already exists! Please use a different Game UID.";
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO games (game_uid, name, provider, category, is_active, sort_order) VALUES (?, ?, ?, ?, ?, ?)");
+            $stmt->execute([
+                $_POST['game_uid'],
+                $_POST['name'],
+                $_POST['provider'],
+                $_POST['category'],
+                isset($_POST['is_active']) ? 1 : 0,
+                $_POST['sort_order']
+            ]);
+            $success = "Game added successfully!";
+            header("Location: admin.php?success=game_added");
+            exit;
+        }
+    } catch (PDOException $e) {
+        $error = "Error adding game: " . $e->getMessage();
+    }
+}
+
+// Handle user balance update
+if (isset($_POST['update_user_balance'])) {
+    $stmt = $pdo->prepare("UPDATE users SET balance = ?, currency = ? WHERE id = ?");
+    $stmt->execute([$_POST['new_balance'], $_POST['currency'], $_POST['user_id']]);
+    $success = "User balance updated successfully!";
+}
+
+// Handle settings update
+if (isset($_POST['update_settings'])) {
+    $settingsToUpdate = [
+        'casino_name', 'casino_tagline', 'default_currency', 'logo_path',
+        'theme_color', 'min_bet', 'max_bet',
+        'support_email', 'support_phone', 'facebook_url', 'twitter_url', 'instagram_url'
+    ];
+    
+    foreach ($settingsToUpdate as $key) {
+        if (isset($_POST[$key])) {
+            SiteSettings::set($key, $_POST[$key]);
+        }
+    }
+    
+    // Handle logo upload
+    if (isset($_FILES['logo_file']) && $_FILES['logo_file']['error'] === 0) {
+        $uploadDir = 'images/';
+        if (!file_exists($uploadDir)) {
+            mkdir($uploadDir, 0777, true);
+        }
+        
+        $extension = pathinfo($_FILES['logo_file']['name'], PATHINFO_EXTENSION);
+        $filename = 'logo_' . time() . '.' . $extension;
+        $uploadPath = $uploadDir . $filename;
+        
+        if (move_uploaded_file($_FILES['logo_file']['tmp_name'], $uploadPath)) {
+            SiteSettings::set('logo_path', $uploadPath);
+        }
+    }
+    
+    $success = "Settings updated successfully!";
+}
+
+// Load site settings
+$siteSettings = SiteSettings::load();
+
+// Get statistics
+$totalUsers = $pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
+$totalGames = $pdo->query("SELECT COUNT(*) FROM games WHERE is_active = 1")->fetchColumn();
+$totalBets = $pdo->query("SELECT COUNT(*) FROM transactions WHERE type = 'bet'")->fetchColumn();
+$totalRevenue = $pdo->query("SELECT SUM(amount) FROM transactions WHERE type = 'bet'")->fetchColumn() ?? 0;
+
+// Get all games
+$games = $pdo->query("SELECT * FROM games ORDER BY sort_order ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
+
+// Get all users
+$users = $pdo->query("SELECT id, username, phone, balance, currency, created_at, last_login, status FROM users ORDER BY created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
+
+// Get most active players (top 10 by total bets)
+$topPlayers = $pdo->query("
+    SELECT 
+        u.id,
+        u.username,
+        u.phone,
+        u.balance,
+        u.currency,
+        COUNT(t.id) as total_games,
+        SUM(CASE WHEN t.type = 'bet' THEN t.amount ELSE 0 END) as total_bets,
+        SUM(CASE WHEN t.type = 'win' THEN t.amount ELSE 0 END) as total_wins,
+        MAX(t.created_at) as last_played
+    FROM users u
+    LEFT JOIN transactions t ON u.id = t.user_id
+    WHERE t.type IN ('bet', 'win')
+    GROUP BY u.id
+    ORDER BY total_games DESC
+    LIMIT 10
+")->fetchAll(PDO::FETCH_ASSOC);
+
+// Get most bet games
+$mostBetGames = $pdo->query("
+    SELECT 
+        g.id,
+        g.game_uid,
+        g.name,
+        g.provider,
+        g.category,
+        g.image,
+        COUNT(t.id) as bet_count,
+        COALESCE(SUM(t.amount), 0) as total_bet_amount,
+        COUNT(DISTINCT t.user_id) as unique_players,
+        MAX(t.created_at) as last_played
+    FROM games g
+    LEFT JOIN transactions t ON g.game_uid COLLATE utf8mb4_unicode_ci = t.game_uid COLLATE utf8mb4_unicode_ci AND t.type = 'bet'
+    GROUP BY g.id, g.game_uid, g.name, g.provider, g.category, g.image
+    ORDER BY total_bet_amount DESC
+    LIMIT 20
+")->fetchAll(PDO::FETCH_ASSOC);
+
+// Get recent transactions (betting history)
+$transactions = $pdo->query("
+    SELECT t.*, u.username, u.phone, u.currency 
+    FROM transactions t 
+    LEFT JOIN users u ON t.user_id = u.id 
+    ORDER BY t.created_at DESC 
+    LIMIT 100
+")->fetchAll(PDO::FETCH_ASSOC);
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Admin - Game Management</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; 
+            background: #fafafa; 
+            color: #1a1a1a;
+        }
+        .header { 
+            background: white; 
+            border-bottom: 1px solid #e5e7eb;
+            padding: 16px 24px; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+        }
+        .header h1 { 
+            font-size: 20px; 
+            font-weight: 600;
+            color: #1a1a1a;
+        }
+        .header a { 
+            color: #6b7280; 
+            text-decoration: none; 
+            padding: 8px 16px; 
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        .header a:hover { background: #f9fafb; }
+        .container { max-width: 1400px; margin: 24px auto; padding: 0 24px; }
+        .success { 
+            background: #f0fdf4; 
+            border: 1px solid #86efac;
+            color: #166534; 
+            padding: 12px 16px; 
+            border-radius: 8px; 
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .stats { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); 
+            gap: 16px; 
+            margin-bottom: 24px; 
+        }
+        .stat-card { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            border: 1px solid #e5e7eb;
+        }
+        .stat-card h3 { 
+            color: #6b7280; 
+            font-size: 13px; 
+            font-weight: 500;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .stat-card .number { 
+            font-size: 28px; 
+            font-weight: 600; 
+            color: #1a1a1a; 
+        }
+        .tabs { 
+            display: flex; 
+            gap: 0;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 4px;
+            margin-bottom: 24px;
+            overflow-x: auto;
+        }
+        .tab { 
+            padding: 10px 20px; 
+            background: transparent; 
+            border: none; 
+            color: #6b7280; 
+            cursor: pointer; 
+            font-size: 14px; 
+            font-weight: 500;
+            border-radius: 6px;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .tab:hover { background: #f9fafb; }
+        .tab.active { 
+            background: #1a1a1a; 
+            color: white;
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .table-container { 
+            background: white; 
+            border-radius: 8px; 
+            border: 1px solid #e5e7eb;
+            overflow: hidden;
+        }
+        .table-container h2 {
+            padding: 20px 24px;
+            border-bottom: 1px solid #e5e7eb;
+            font-size: 18px;
+            font-weight: 600;
+            margin: 0;
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse;
+        }
+        th { 
+            background: #fafafa; 
+            padding: 12px 24px; 
+            text-align: left; 
+            font-weight: 500; 
+            color: #6b7280;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        td { 
+            padding: 16px 24px; 
+            border-bottom: 1px solid #f3f4f6;
+            font-size: 14px;
+        }
+        tr:last-child td { border-bottom: none; }
+        tr:hover { background: #fafafa; }
+        .badge { 
+            padding: 4px 10px; 
+            border-radius: 6px; 
+            font-size: 12px; 
+            font-weight: 500;
+            display: inline-block;
+        }
+        .badge-success { background: #d1fae5; color: #065f46; }
+        .badge-danger { background: #fee2e2; color: #991b1b; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+        .badge-info { background: #dbeafe; color: #1e40af; }
+        .btn { 
+            padding: 10px 18px; 
+            background: #1a1a1a; 
+            color: white; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 14px;
+            font-weight: 500;
+            text-decoration: none; 
+            display: inline-block;
+            transition: all 0.2s;
+        }
+        .btn:hover { background: #2a2a2a; }
+        .btn-small { padding: 6px 12px; font-size: 13px; }
+        .btn-danger { background: #dc2626; }
+        .btn-danger:hover { background: #b91c1c; }
+        .game-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); 
+            gap: 16px;
+            padding: 24px;
+        }
+        .game-card { 
+            background: white; 
+            border-radius: 8px; 
+            overflow: hidden;
+            border: 1px solid #e5e7eb;
+            transition: all 0.2s;
+        }
+        .game-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .game-card.inactive { opacity: 0.5; }
+        .game-image { 
+            width: 100%; 
+            height: 160px; 
+            object-fit: cover; 
+            background: #f3f4f6;
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            color: #9ca3af; 
+            font-size: 36px;
+            font-weight: 600;
+        }
+        .game-image img { width: 100%; height: 100%; object-fit: cover; }
+        .game-info { padding: 16px; }
+        .game-info h3 { 
+            color: #1a1a1a; 
+            margin-bottom: 8px;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .game-meta { 
+            color: #6b7280; 
+            font-size: 13px; 
+            margin-bottom: 12px;
+        }
+        .game-actions { 
+            display: flex; 
+            gap: 8px; 
+            flex-wrap: wrap;
+            padding: 12px 16px;
+            background: #fafafa;
+            border-top: 1px solid #e5e7eb;
+        }
+        .modal { 
+            display: none; 
+            position: fixed; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+            background: rgba(0,0,0,0.5); 
+            z-index: 1000; 
+            overflow-y: auto;
+        }
+        .modal-content { 
+            background: white; 
+            max-width: 600px; 
+            margin: 50px auto; 
+            padding: 24px; 
+            border-radius: 12px;
+        }
+        .modal-content h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { 
+            display: block; 
+            margin-bottom: 6px; 
+            color: #374151; 
+            font-weight: 500;
+            font-size: 14px;
+        }
+        .form-group input, .form-group select, .form-group textarea { 
+            width: 100%; 
+            padding: 10px 12px; 
+            border: 1px solid #d1d5db; 
+            border-radius: 6px; 
+            font-size: 14px;
+            font-family: inherit;
+        }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+            outline: none;
+            border-color: #1a1a1a;
+        }
+        .form-group input[type="checkbox"] { width: auto; }
+        .form-group small { color: #6b7280; font-size: 13px; }
+        .close { 
+            float: right; 
+            font-size: 24px; 
+            cursor: pointer; 
+            color: #9ca3af;
+            line-height: 1;
+        }
+        .close:hover { color: #1a1a1a; }
+        @media (max-width: 768px) {
+            .game-grid { grid-template-columns: 1fr; }
+            .stats { grid-template-columns: 1fr; }
+            .tabs { overflow-x: scroll; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Admin Dashboard</h1>
+        <div>
+            <span style="margin-right: 20px;"><?php echo htmlspecialchars($_SESSION['admin_username']); ?></span>
+            <a href="casino.php">View Casino</a>
+            <a href="?logout=1" style="margin-left: 10px;">Logout</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <?php if (isset($success)): ?>
+            <div style="background: #d1fae5; border: 1px solid #10b981; color: #065f46; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;">
+                ✅ <?php echo htmlspecialchars($success); ?>
+            </div>
+        <?php endif; ?>
+        
+        <?php if (isset($error)): ?>
+            <div style="background: #fee2e2; border: 1px solid #ef4444; color: #991b1b; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;">
+                ❌ <?php echo htmlspecialchars($error); ?>
+            </div>
+        <?php endif; ?>
+
+        <div class="stats">
+            <div class="stat-card">
+                <h3>Total Users</h3>
+                <div class="number"><?php echo $totalUsers; ?></div>
+            </div>
+            <div class="stat-card">
+                <h3>Active Games</h3>
+                <div class="number"><?php echo $totalGames; ?></div>
+            </div>
+            <div class="stat-card">
+                <h3>Total Bets</h3>
+                <div class="number"><?php echo number_format($totalBets); ?></div>
+            </div>
+            <div class="stat-card">
+                <h3>Total Revenue</h3>
+                <div class="number">₱<?php echo number_format($totalRevenue, 2); ?></div>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('games')">🎮 Games</button>
+            <button class="tab" onclick="switchTab('users')">👥 Users</button>
+            <button class="tab" onclick="switchTab('history')">📊 Betting History</button>
+            <button class="tab" onclick="switchTab('topplayers')">🏆 Top Players</button>
+            <button class="tab" onclick="switchTab('mostplayed')">🎯 Most Bets Games</button>
+            <button class="tab" onclick="switchTab('settings')">⚙️ Settings</button>
+        </div>
+
+        <!-- Games Tab -->
+        <div id="games-tab" class="tab-content active">
+            <div style="margin-bottom: 20px;">
+                <button class="btn" onclick="showModal('addGameModal')">➕ Add New Game</button>
+            </div>
+
+            <div class="game-grid">
+                <?php foreach ($games as $game): ?>
+                    <div class="game-card <?php echo $game['is_active'] ? '' : 'inactive'; ?>">
+                        <div class="game-image">
+                            <?php if ($game['image'] && file_exists($game['image'])): ?>
+                                <img src="<?php echo htmlspecialchars($game['image']); ?>" alt="<?php echo htmlspecialchars($game['name']); ?>">
+                            <?php else: ?>
+                                🎰
+                            <?php endif; ?>
+                        </div>
+                        <div class="game-info">
+                            <h3><?php echo htmlspecialchars($game['name']); ?></h3>
+                            <div class="game-meta">
+                                <strong>ID:</strong> <?php echo htmlspecialchars($game['game_uid']); ?><br>
+                                <strong>Provider:</strong> <?php echo htmlspecialchars($game['provider']); ?><br>
+                                <strong>Category:</strong> <?php echo htmlspecialchars($game['category']); ?><br>
+                                <strong>Status:</strong> <?php echo $game['is_active'] ? '✅ Active' : '❌ Inactive'; ?>
+                            </div>
+                            <div class="game-actions">
+                                <button class="btn btn-small" onclick="editGame(<?php echo htmlspecialchars(json_encode($game)); ?>)">✏️ Edit</button>
+                                <button class="btn btn-small" onclick="uploadImage(<?php echo $game['id']; ?>, '<?php echo htmlspecialchars($game['name']); ?>')">📷 Upload Image</button>
+                                <a href="?delete=<?php echo $game['id']; ?>" class="btn btn-small btn-danger" onclick="return confirm('Delete this game?')">🗑️ Delete</a>
+                            </div>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+
+        <!-- Users Tab -->
+        <div id="users-tab" class="tab-content">
+            <div class="table-container">
+                <h2 style="margin-bottom: 20px;">User Management</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Username</th>
+                            <th>Phone</th>
+                            <th>Balance</th>
+                            <th>Status</th>
+                            <th>Registered</th>
+                            <th>Last Login</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($users as $user): 
+                            $userCurrency = $user['currency'] ?? 'PHP';
+                        ?>
+                            <tr>
+                                <td><?php echo $user['id']; ?></td>
+                                <td><?php echo htmlspecialchars($user['username']); ?></td>
+                                <td><?php echo htmlspecialchars($user['phone']); ?></td>
+                                <td><strong><?php echo formatCurrency($user['balance'], $userCurrency); ?></strong></td>
+                                <td>
+                                    <span class="badge <?php echo $user['status'] === 'active' ? 'badge-success' : 'badge-danger'; ?>">
+                                        <?php echo ucfirst($user['status']); ?>
+                                    </span>
+                                </td>
+                                <td><?php echo date('M d, Y', strtotime($user['created_at'])); ?></td>
+                                <td><?php echo $user['last_login'] ? date('M d, Y H:i', strtotime($user['last_login'])) : 'Never'; ?></td>
+                                <td>
+                                    <button class="btn btn-small" onclick="editUserBalance(<?php echo $user['id']; ?>, '<?php echo htmlspecialchars($user['username']); ?>', <?php echo $user['balance']; ?>, '<?php echo $userCurrency; ?>')">💰 Edit Balance</button>
+                                    <button class="btn btn-small" onclick="viewUserHistory(<?php echo $user['id']; ?>, '<?php echo htmlspecialchars($user['username']); ?>')">📊 History</button>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Betting History Tab -->
+        <div id="history-tab" class="tab-content">
+            <div class="table-container">
+                <h2 style="margin-bottom: 20px;">Betting History</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date/Time</th>
+                            <th>User</th>
+                            <th>Phone</th>
+                            <th>Type</th>
+                            <th>Amount</th>
+                            <th>Balance Before</th>
+                            <th>Balance After</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($transactions as $trans): ?>
+                            <tr>
+                                <td><?php echo date('M d, Y H:i:s', strtotime($trans['created_at'])); ?></td>
+                                <td><?php echo htmlspecialchars($trans['username'] ?? 'N/A'); ?></td>
+                                <td><?php echo htmlspecialchars($trans['phone'] ?? 'N/A'); ?></td>
+                                <td>
+                                    <span class="badge <?php 
+                                        echo $trans['type'] === 'bet' ? 'badge-warning' : 
+                                             ($trans['type'] === 'win' ? 'badge-success' : 'badge-info'); 
+                                    ?>">
+                                        <?php echo strtoupper($trans['type']); ?>
+                                    </span>
+                                </td>
+                                <td><strong>₱<?php echo number_format($trans['amount'], 2); ?></strong></td>
+                                <td>₱<?php echo number_format($trans['balance_before'], 2); ?></td>
+                                <td>₱<?php echo number_format($trans['balance_after'], 2); ?></td>
+                                <td><?php echo htmlspecialchars($trans['description'] ?? '-'); ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Top Players Tab -->
+        <div id="topplayers-tab" class="tab-content">
+            <div class="table-container">
+                <h2 style="margin-bottom: 20px;">🏆 Most Active Players</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Username</th>
+                            <th>Phone</th>
+                            <th>Total Games</th>
+                            <th>Total Bets</th>
+                            <th>Total Wins</th>
+                            <th>Net P/L</th>
+                            <th>Current Balance</th>
+                            <th>Last Played</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php 
+                        $rank = 1;
+                        foreach ($topPlayers as $player): 
+                            $netPL = $player['total_wins'] - $player['total_bets'];
+                            $plClass = $netPL >= 0 ? 'badge-success' : 'badge-warning';
+                            $currency = $player['currency'] ?? 'PHP';
+                            $symbol = $currency === 'PHP' ? '₱' : ($currency . ' ');
+                        ?>
+                            <tr>
+                                <td><strong><?php echo $rank++; ?></strong></td>
+                                <td><?php echo htmlspecialchars($player['username']); ?></td>
+                                <td><?php echo htmlspecialchars($player['phone']); ?></td>
+                                <td><strong><?php echo number_format($player['total_games']); ?></strong></td>
+                                <td><?php echo $symbol . number_format($player['total_bets'], 2); ?></td>
+                                <td><?php echo $symbol . number_format($player['total_wins'], 2); ?></td>
+                                <td>
+                                    <span class="badge <?php echo $plClass; ?>">
+                                        <?php echo $symbol . number_format($netPL, 2); ?>
+                                    </span>
+                                </td>
+                                <td><?php echo $symbol . number_format($player['balance'], 2); ?></td>
+                                <td><?php echo $player['last_played'] ? date('M d, Y H:i', strtotime($player['last_played'])) : 'Never'; ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        <?php if (empty($topPlayers)): ?>
+                            <tr>
+                                <td colspan="9" style="text-align: center; color: #999;">No player activity yet</td>
+                            </tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Most Bets Games Tab -->
+        <div id="mostplayed-tab" class="tab-content">
+            <div class="table-container">
+                <h2 style="margin-bottom: 20px;">🎯 Most Bets Games</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Image</th>
+                            <th>Game Name</th>
+                            <th>Provider</th>
+                            <th>Category</th>
+                            <th>Total Bets (₱)</th>
+                            <th>Bet Count</th>
+                            <th>Unique Players</th>
+                            <th>Last Played</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php 
+                        $rank = 1;
+                        foreach ($mostBetGames as $game): 
+                        ?>
+                            <tr>
+                                <td><strong><?php echo $rank++; ?></strong></td>
+                                <td>
+                                    <?php if ($game['image'] && file_exists($game['image'])): ?>
+                                        <img src="<?php echo htmlspecialchars($game['image']); ?>" style="width: 50px; height: 50px; border-radius: 8px; object-fit: cover;">
+                                    <?php else: ?>
+                                        <div style="width: 50px; height: 50px; background: #667eea; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">
+                                            <?php echo strtoupper(substr($game['name'], 0, 2)); ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </td>
+                                <td><strong><?php echo htmlspecialchars($game['name']); ?></strong></td>
+                                <td><?php echo htmlspecialchars($game['provider']); ?></td>
+                                <td>
+                                    <span class="badge badge-info">
+                                        <?php echo htmlspecialchars($game['category']); ?>
+                                    </span>
+                                </td>
+                                <td><strong style="color: #667eea; font-size: 18px;">₱<?php echo number_format($game['total_bet_amount'], 2); ?></strong></td>
+                                <td><?php echo number_format($game['bet_count']); ?> bets</td>
+                                <td><?php echo number_format($game['unique_players']); ?> players</td>
+                                <td><?php echo $game['last_played'] ? date('M d, Y H:i', strtotime($game['last_played'])) : 'Never'; ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        <?php if (empty($mostBetGames)): ?>
+                            <tr>
+                                <td colspan="9" style="text-align: center; color: #999;">No bets placed yet</td>
+                            </tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div id="settings-tab" class="tab-content">
+            <div class="table-container">
+                <h2 style="margin-bottom: 20px;">⚙️ Site Settings</h2>
+                
+                <form method="POST" enctype="multipart/form-data" style="max-width: 800px;">
+                    <h3 style="margin-top: 0;">General Settings</h3>
+                    
+                    <div class="form-group">
+                        <label>Casino Name</label>
+                        <input type="text" name="casino_name" value="<?php echo htmlspecialchars($siteSettings['casino_name'] ?? 'Casino PHP'); ?>" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Tagline</label>
+                        <input type="text" name="casino_tagline" value="<?php echo htmlspecialchars($siteSettings['casino_tagline'] ?? 'Play & Win Big!'); ?>">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Default Currency</label>
+                        <select name="default_currency">
+                            <?php
+                            $currencies = ['PHP' => '₱ PHP', 'USD' => '$ USD', 'EUR' => '€ EUR', 'GBP' => '£ GBP', 'JPY' => '¥ JPY'];
+                            $currentCurrency = $siteSettings['default_currency'] ?? 'PHP';
+                            foreach ($currencies as $code => $name) {
+                                $selected = ($code === $currentCurrency) ? 'selected' : '';
+                                echo "<option value=\"$code\" $selected>$name</option>";
+                            }
+                            ?>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Theme Color</label>
+                        <input type="color" name="theme_color" value="<?php echo htmlspecialchars($siteSettings['theme_color'] ?? '#6366f1'); ?>">
+                    </div>
+                    
+                    <h3 style="margin-top: 30px;">Logo & Branding</h3>
+                    
+                    <div class="form-group">
+                        <label>Current Logo</label>
+                        <?php if (!empty($siteSettings['logo_path']) && file_exists($siteSettings['logo_path'])): ?>
+                            <img src="<?php echo htmlspecialchars($siteSettings['logo_path']); ?>" style="max-width: 200px; display: block; margin: 10px 0;">
+                        <?php else: ?>
+                            <p style="color: #999;">No logo uploaded</p>
+                        <?php endif; ?>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Upload New Logo</label>
+                        <input type="file" name="logo_file" accept="image/*">
+                        <small style="color: #666;">Recommended: PNG or SVG, max 500KB</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Logo Path (URL)</label>
+                        <input type="text" name="logo_path" value="<?php echo htmlspecialchars($siteSettings['logo_path'] ?? ''); ?>" placeholder="images/logo.png">
+                    </div>
+                    
+                    <h3 style="margin-top: 30px;">Game Settings</h3>
+                    
+                    <div class="form-group">
+                        <label>Minimum Bet</label>
+                        <input type="number" step="0.01" name="min_bet" value="<?php echo htmlspecialchars($siteSettings['min_bet'] ?? '1.00'); ?>" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Maximum Bet</label>
+                        <input type="number" step="0.01" name="max_bet" value="<?php echo htmlspecialchars($siteSettings['max_bet'] ?? '10000.00'); ?>" required>
+                    </div>
+                    
+                    <h3 style="margin-top: 30px;">Contact Information</h3>
+                    
+                    <div class="form-group">
+                        <label>Support Email</label>
+                        <input type="email" name="support_email" value="<?php echo htmlspecialchars($siteSettings['support_email'] ?? ''); ?>" placeholder="support@casino.com">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Support Phone</label>
+                        <input type="text" name="support_phone" value="<?php echo htmlspecialchars($siteSettings['support_phone'] ?? ''); ?>" placeholder="+639123456789">
+                    </div>
+                    
+                    <h3 style="margin-top: 30px;">Social Media</h3>
+                    
+                    <div class="form-group">
+                        <label>Facebook URL</label>
+                        <input type="url" name="facebook_url" value="<?php echo htmlspecialchars($siteSettings['facebook_url'] ?? ''); ?>" placeholder="https://facebook.com/your-page">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Twitter URL</label>
+                        <input type="url" name="twitter_url" value="<?php echo htmlspecialchars($siteSettings['twitter_url'] ?? ''); ?>" placeholder="https://twitter.com/your-account">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Instagram URL</label>
+                        <input type="url" name="instagram_url" value="<?php echo htmlspecialchars($siteSettings['instagram_url'] ?? ''); ?>" placeholder="https://instagram.com/your-account">
+                    </div>
+                    
+                    <button type="submit" name="update_settings" class="btn" style="margin-top: 20px;">💾 Save Settings</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit User Balance Modal -->
+    <div id="editBalanceModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="hideModal('editBalanceModal')">&times;</span>
+            <h2>Edit User Balance</h2>
+            <p id="balance_username" style="color: #666; margin-bottom: 20px;"></p>
+            <form method="POST">
+                <input type="hidden" name="user_id" id="balance_user_id">
+                <input type="hidden" name="currency" id="balance_currency">
+                <div class="form-group">
+                    <label>Current Balance</label>
+                    <input type="text" id="current_balance" disabled>
+                </div>
+                <div class="form-group">
+                    <label>New Balance</label>
+                    <input type="number" step="0.01" name="new_balance" id="new_balance" required>
+                </div>
+                <button type="submit" name="update_user_balance" class="btn">Update Balance</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- View User History Modal -->
+    <div id="userHistoryModal" class="modal">
+        <div class="modal-content" style="max-width: 900px;">
+            <span class="close" onclick="hideModal('userHistoryModal')">&times;</span>
+            <h2>User Betting History</h2>
+            <p id="history_username" style="color: #666; margin-bottom: 20px;"></p>
+            <div id="user_history_content" style="max-height: 500px; overflow-y: auto;">
+                Loading...
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Game Modal -->
+    <div id="addGameModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="hideModal('addGameModal')">&times;</span>
+            <h2>Add New Game</h2>
+            <form method="POST">
+                <div class="form-group">
+                    <label>Game UID (ID for launching)</label>
+                    <input type="text" name="game_uid" required>
+                </div>
+                <div class="form-group">
+                    <label>Game Name</label>
+                    <input type="text" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label>Provider</label>
+                    <input type="text" name="provider" value="JILI" required>
+                </div>
+                <div class="form-group">
+                    <label>Category</label>
+                    <select name="category" required>
+                        <option value="Slots">Slots</option>
+                        <option value="Table">Table</option>
+                        <option value="Fishing">Fishing</option>
+                        <option value="Arcade">Arcade</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Sort Order</label>
+                    <input type="number" name="sort_order" value="0">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" name="is_active" checked> Active
+                    </label>
+                </div>
+                <button type="submit" name="add_game" class="btn">Add Game</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit Game Modal -->
+    <div id="editGameModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="hideModal('editGameModal')">&times;</span>
+            <h2>Edit Game</h2>
+            <form method="POST">
+                <input type="hidden" name="game_id" id="edit_game_id">
+                <div class="form-group">
+                    <label>Game UID</label>
+                    <input type="text" id="edit_game_uid" disabled>
+                </div>
+                <div class="form-group">
+                    <label>Game Name</label>
+                    <input type="text" name="name" id="edit_name" required>
+                </div>
+                <div class="form-group">
+                    <label>Provider</label>
+                    <input type="text" name="provider" id="edit_provider" required>
+                </div>
+                <div class="form-group">
+                    <label>Category</label>
+                    <select name="category" id="edit_category" required>
+                        <option value="Slots">Slots</option>
+                        <option value="Table">Table</option>
+                        <option value="Fishing">Fishing</option>
+                        <option value="Arcade">Arcade</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Sort Order</label>
+                    <input type="number" name="sort_order" id="edit_sort_order">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" name="is_active" id="edit_is_active"> Active
+                    </label>
+                </div>
+                <button type="submit" name="update_game" class="btn">Update Game</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Upload Image Modal -->
+    <div id="uploadImageModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="hideModal('uploadImageModal')">&times;</span>
+            <h2>Upload Game Image</h2>
+            <p id="upload_game_name" style="color: #666; margin-bottom: 20px;"></p>
+            <form id="uploadImageForm" enctype="multipart/form-data">
+                <input type="hidden" name="game_id" id="upload_game_id">
+                <div class="form-group">
+                    <label>Select Image</label>
+                    <input type="file" name="game_image" id="game_image_input" accept="image/*" required>
+                </div>
+                <div id="upload_progress" style="display: none; margin-bottom: 15px;">
+                    <div style="background: #e5e7eb; border-radius: 4px; height: 6px; overflow: hidden;">
+                        <div id="progress_bar" style="background: #2563eb; height: 100%; width: 0%; transition: width 0.3s;"></div>
+                    </div>
+                    <p id="upload_status" style="font-size: 13px; color: #666; margin-top: 8px;"></p>
+                </div>
+                <button type="submit" id="upload_btn" class="btn">Upload Image</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Check for success message in URL
+        window.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('success') === 'game_added') {
+                alert('✅ Game added successfully!');
+                // Remove the success parameter from URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
+        });
+        
+        function showModal(id) {
+            document.getElementById(id).style.display = 'block';
+        }
+        
+        function hideModal(id) {
+            document.getElementById(id).style.display = 'none';
+        }
+        
+        function switchTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            
+            // Show selected tab
+            document.getElementById(tabName + '-tab').classList.add('active');
+            event.target.classList.add('active');
+        }
+        
+        function editUserBalance(userId, username, currentBalance, currency) {
+            currency = currency || 'PHP';
+            const symbols = {'PHP': '₱', 'USD': '$', 'GBP': '£', 'EUR': '€', 'JPY': '¥', 'CNY': '¥', 'SGD': 'S$', 'MYR': 'RM', 'THB': '฿', 'VND': '₫', 'IDR': 'Rp'};
+            const symbol = symbols[currency] || currency + ' ';
+            
+            document.getElementById('balance_user_id').value = userId;
+            document.getElementById('balance_currency').value = currency;
+            document.getElementById('balance_username').textContent = 'User: ' + username + ' (' + currency + ')';
+            document.getElementById('current_balance').value = symbol + parseFloat(currentBalance).toFixed(2);
+            document.getElementById('new_balance').value = currentBalance;
+            showModal('editBalanceModal');
+        }
+        
+        function viewUserHistory(userId, username) {
+            document.getElementById('history_username').textContent = 'User: ' + username;
+            showModal('userHistoryModal');
+            
+            // Fetch user transaction history via AJAX
+            fetch('get_user_history.php?user_id=' + userId)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        let html = '<table style="width: 100%;"><thead><tr>' +
+                            '<th>Date/Time</th><th>Type</th><th>Game</th><th>Amount</th><th>Balance Before</th><th>Balance After</th>' +
+                            '</tr></thead><tbody>';
+                        
+                        data.transactions.forEach(t => {
+                            const badgeClass = t.type === 'bet' ? 'badge-warning' : (t.type === 'win' ? 'badge-success' : 'badge-info');
+                            const currency = t.currency || 'PHP';
+                            const symbol = currency === 'PHP' ? '₱' : currency + ' ';
+                            const gameName = t.game_name || 'N/A';
+                            html += `<tr>
+                                <td>${t.created_at}</td>
+                                <td><span class="badge ${badgeClass}">${t.type.toUpperCase()}</span></td>
+                                <td><small>${gameName}</small></td>
+                                <td><strong>${symbol}${parseFloat(t.amount).toFixed(2)}</strong></td>
+                                <td>${symbol}${parseFloat(t.balance_before).toFixed(2)}</td>
+                                <td>${symbol}${parseFloat(t.balance_after).toFixed(2)}</td>
+                            </tr>`;
+                        });
+                        
+                        html += '</tbody></table>';
+                        document.getElementById('user_history_content').innerHTML = html;
+                    } else {
+                        document.getElementById('user_history_content').innerHTML = '<p>No transaction history found.</p>';
+                    }
+                })
+                .catch(error => {
+                    document.getElementById('user_history_content').innerHTML = '<p>Error loading history.</p>';
+                });
+        }
+        
+        function editGame(game) {
+            document.getElementById('edit_game_id').value = game.id;
+            document.getElementById('edit_game_uid').value = game.game_uid;
+            document.getElementById('edit_name').value = game.name;
+            document.getElementById('edit_provider').value = game.provider;
+            document.getElementById('edit_category').value = game.category;
+            document.getElementById('edit_sort_order').value = game.sort_order;
+            document.getElementById('edit_is_active').checked = game.is_active == 1;
+            showModal('editGameModal');
+        }
+        
+        function uploadImage(gameId, gameName) {
+            document.getElementById('upload_game_id').value = gameId;
+            document.getElementById('upload_game_name').textContent = gameName;
+            document.getElementById('upload_progress').style.display = 'none';
+            document.getElementById('uploadImageForm').reset();
+            showModal('uploadImageModal');
+        }
+        
+        // Handle image upload via AJAX
+        document.getElementById('uploadImageForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const uploadBtn = document.getElementById('upload_btn');
+            const progressDiv = document.getElementById('upload_progress');
+            const progressBar = document.getElementById('progress_bar');
+            const statusText = document.getElementById('upload_status');
+            const gameId = document.getElementById('upload_game_id').value;
+            
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading...';
+            progressDiv.style.display = 'block';
+            progressBar.style.width = '0%';
+            statusText.textContent = 'Uploading...';
+            
+            fetch('upload_game_image.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                progressBar.style.width = '100%';
+                
+                if (data.success) {
+                    statusText.textContent = '✓ Upload successful!';
+                    statusText.style.color = '#10b981';
+                    
+                    // Update the game card image without refresh
+                    const gameCard = document.querySelector(`[onclick*="uploadImage(${gameId}"]`).closest('.game-card');
+                    const gameImage = gameCard.querySelector('.game-image');
+                    
+                    if (data.image_path) {
+                        gameImage.innerHTML = `<img src="${data.image_path}?t=${Date.now()}" alt="Game Image" style="width: 100%; height: 100%; object-fit: cover;">`;
+                    }
+                    
+                    setTimeout(() => {
+                        hideModal('uploadImageModal');
+                        uploadBtn.disabled = false;
+                        uploadBtn.textContent = 'Upload Image';
+                    }, 1000);
+                } else {
+                    statusText.textContent = '✗ ' + (data.message || 'Upload failed');
+                    statusText.style.color = '#ef4444';
+                    uploadBtn.disabled = false;
+                    uploadBtn.textContent = 'Upload Image';
+                }
+            })
+            .catch(error => {
+                statusText.textContent = '✗ Upload error: ' + error.message;
+                statusText.style.color = '#ef4444';
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = 'Upload Image';
+            });
+        });
+        
+        window.onclick = function(event) {
+            if (event.target.className === 'modal') {
+                event.target.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>
+<?php
+if (isset($_GET['logout'])) {
+    session_destroy();
+    header('Location: admin.php');
+    exit;
+}
+?>

@@ -1,0 +1,37 @@
+# Ignore log files
+logs/
+*.log
+
+# Ignore environment files
+.env
+
+# Ignore vendor directory (if using Composer)
+vendor/
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Ignore temporary files
+tmp/
+temp/
+*.tmp
+
+# Ignore backup files
+*.bak
+*.backup
+
+# Ignore database dumps
+*.sql.gz
+*.sql.zip
+
+# Ignore sensitive files
+config_local.php
+secrets.php
