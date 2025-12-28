@@ -47,67 +47,83 @@ $result = sendLaunchGameRequest($params);
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title><?php echo htmlspecialchars($gameName); ?> - Casino</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            position: fixed;
+            -webkit-overflow-scrolling: touch;
+        }
         
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #0f172a;
             color: #fff;
-            overflow: hidden;
         }
         
-        .game-header {
-            background: #1e293b;
-            padding: 15px 20px;
+        .floating-home {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            border-radius: 50%;
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-        }
-        
-        .back-btn {
-            background: #334155;
+            justify-content: center;
+            cursor: move;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+            z-index: 10000;
+            transition: box-shadow 0.3s ease;
+            border: 3px solid rgba(255, 255, 255, 0.2);
             color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
+            font-size: 22px;
+            touch-action: none;
+            user-select: none;
         }
         
-        .game-title {
-            font-size: 18px;
-            font-weight: 600;
+        .floating-home:hover {
+            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.6);
         }
         
-        .balance {
-            background: linear-gradient(135deg, #10b981, #059669);
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-weight: 600;
+        .floating-home.dragging {
+            transition: none;
+            opacity: 0.8;
         }
         
         .game-container {
             width: 100%;
-            height: calc(100vh - 60px);
+            height: 100vh;
+            height: 100dvh;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
         }
         
         .game-frame {
             width: 100%;
             height: 100%;
             border: none;
+            display: block;
         }
         
         .error-container {
             display: flex;
             align-items: center;
             justify-content: center;
-            height: calc(100vh - 60px);
+            height: 100vh;
+            height: 100dvh;
             flex-direction: column;
             gap: 20px;
+            padding: 20px;
         }
         
         .error-message {
@@ -115,15 +131,21 @@ $result = sendLaunchGameRequest($params);
             padding: 20px;
             border-radius: 15px;
             max-width: 500px;
+            text-align: center;
+        }
+        
+        @media (max-width: 768px) {
+            .floating-home {
+                width: 45px;
+                height: 45px;
+                font-size: 20px;
+                top: 15px;
+                right: 15px;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="game-header">
-        <button class="back-btn" onclick="location.href='index.php'">← Back</button>
-        <div class="game-title"><?php echo htmlspecialchars($gameName); ?></div>
-        <div class="balance">💰 <?php echo formatCurrency($balance, $userCurrency); ?></div>
-    </div>
     
     <?php if ($result['success']): ?>
         <div class="game-container">
@@ -131,14 +153,89 @@ $result = sendLaunchGameRequest($params);
                     class="game-frame" 
                     allowfullscreen></iframe>
         </div>
+        <button class="floating-home" id="floatingBtn" title="Drag to move">🏠</button>
     <?php else: ?>
         <div class="error-container">
             <div class="error-message">
                 <h3>Failed to load game</h3>
                 <p><?php echo htmlspecialchars($result['error']); ?></p>
             </div>
-            <button class="back-btn" onclick="location.href='index.php'">Return to Lobby</button>
+            <button class="floating-home" id="floatingBtn" title="Drag to move">🏠</button>
         </div>
     <?php endif; ?>
+    
+    <script>
+        const floatingBtn = document.getElementById('floatingBtn');
+        let isDragging = false;
+        let startX, startY, startLeft, startTop;
+        let hasMoved = false;
+
+        function handleStart(e) {
+            isDragging = true;
+            hasMoved = false;
+            floatingBtn.classList.add('dragging');
+            
+            const touch = e.type === 'touchstart' ? e.touches[0] : e;
+            startX = touch.clientX;
+            startY = touch.clientY;
+            
+            const rect = floatingBtn.getBoundingClientRect();
+            startLeft = rect.left;
+            startTop = rect.top;
+            
+            e.preventDefault();
+        }
+
+        function handleMove(e) {
+            if (!isDragging) return;
+            
+            const touch = e.type === 'touchmove' ? e.touches[0] : e;
+            const deltaX = touch.clientX - startX;
+            const deltaY = touch.clientY - startY;
+            
+            if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+                hasMoved = true;
+            }
+            
+            let newLeft = startLeft + deltaX;
+            let newTop = startTop + deltaY;
+            
+            // Keep within viewport bounds
+            const btnWidth = floatingBtn.offsetWidth;
+            const btnHeight = floatingBtn.offsetHeight;
+            newLeft = Math.max(10, Math.min(window.innerWidth - btnWidth - 10, newLeft));
+            newTop = Math.max(10, Math.min(window.innerHeight - btnHeight - 10, newTop));
+            
+            floatingBtn.style.left = newLeft + 'px';
+            floatingBtn.style.top = newTop + 'px';
+            floatingBtn.style.right = 'auto';
+            floatingBtn.style.bottom = 'auto';
+            
+            e.preventDefault();
+        }
+
+        function handleEnd(e) {
+            if (!isDragging) return;
+            isDragging = false;
+            floatingBtn.classList.remove('dragging');
+            
+            // Only navigate if button wasn't moved
+            if (!hasMoved) {
+                location.href = 'index.php';
+            }
+            
+            e.preventDefault();
+        }
+
+        // Mouse events
+        floatingBtn.addEventListener('mousedown', handleStart);
+        document.addEventListener('mousemove', handleMove);
+        document.addEventListener('mouseup', handleEnd);
+
+        // Touch events
+        floatingBtn.addEventListener('touchstart', handleStart, { passive: false });
+        document.addEventListener('touchmove', handleMove, { passive: false });
+        document.addEventListener('touchend', handleEnd, { passive: false });
+    </script>
 </body>
 </html>
