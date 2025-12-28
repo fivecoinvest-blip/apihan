@@ -120,7 +120,7 @@ $result = sendLaunchGameRequest($params);
 </head>
 <body>
     <div class="game-header">
-        <button class="back-btn" onclick="location.href='casino.php'">← Back</button>
+        <button class="back-btn" onclick="location.href='index.php'">← Back</button>
         <div class="game-title"><?php echo htmlspecialchars($gameName); ?></div>
         <div class="balance">💰 <?php echo formatCurrency($balance, $userCurrency); ?></div>
     </div>
@@ -137,7 +137,7 @@ $result = sendLaunchGameRequest($params);
                 <h3>Failed to load game</h3>
                 <p><?php echo htmlspecialchars($result['error']); ?></p>
             </div>
-            <button class="back-btn" onclick="location.href='casino.php'">Return to Lobby</button>
+            <button class="back-btn" onclick="location.href='index.php'">Return to Lobby</button>
         </div>
     <?php endif; ?>
 </body>

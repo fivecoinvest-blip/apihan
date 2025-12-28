@@ -18,7 +18,7 @@ if (isset($_POST['login'])) {
         $_SESSION['user_id'] = $loggedUser['id'];
         $_SESSION['username'] = $loggedUser['username'];
         $_SESSION['phone'] = $loggedUser['phone'];
-        header('Location: casino.php');
+        header('Location: index.php');
         exit;
     } else {
         $error = 'Invalid phone number/username or password';

@@ -4,109 +4,414 @@ require_once 'config.php';
 require_once 'db_helper.php';
 require_once 'currency_helper.php';
 
-// Fetch active games
+$loggedIn = isset($_SESSION['user_id']);
+$balance = 0;
+$userCurrency = 'PHP';
+$username = '';
+
+if ($loggedIn) {
+    $userModel = new User();
+    $currentUser = $userModel->getById($_SESSION['user_id']);
+    $balance = $userModel->getBalance($_SESSION['user_id']);
+    $userCurrency = $currentUser['currency'] ?? 'PHP';
+    $username = $currentUser['username'] ?? '';
+    $_SESSION['currency'] = $userCurrency;
+}
+
+// Get games from database
 $db = Database::getInstance();
 $pdo = $db->getConnection();
-$games = $pdo->query("SELECT * FROM games WHERE is_active = 1 ORDER BY sort_order ASC, name ASC LIMIT 20")->fetchAll(PDO::FETCH_ASSOC);
-
-$loggedIn = isset($_SESSION['user_id']);
-$username = $_SESSION['username'] ?? null;
-$userCurrency = $_SESSION['currency'] ?? 'PHP';
+$stmt = $pdo->query("SELECT * FROM games WHERE is_active = 1 ORDER BY sort_order ASC, name ASC");
+$gamesFromDb = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Casino Lobby</title>
+    <meta name="theme-color" content="#1e293b">
+    <title>Casino - Game Lobby</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192.png">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: #0b1120; color: #e5e7eb; line-height: 1.6; }
-        a { text-decoration: none; color: inherit; }
         
-        .hero { max-width: 1100px; margin: 0 auto; padding: 40px 20px 10px; text-align: center; }
-        .hero h1 { font-size: 32px; margin-bottom: 12px; color: #fff; }
-        .hero p { color: #9ca3af; margin-bottom: 24px; }
-        .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-        .btn { padding: 12px 20px; border-radius: 10px; font-weight: 600; border: none; cursor: pointer; transition: transform 0.15s; }
-        .btn-primary { background: #2563eb; color: #fff; }
-        .btn-secondary { background: transparent; color: #fff; border: 1px solid #3b4252; }
-        .btn:hover { transform: translateY(-1px); }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #fff;
+        }
         
-        .section { max-width: 1100px; margin: 0 auto; padding: 30px 20px 50px; }
-        .section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-        .section-title h2 { font-size: 20px; color: #fff; }
+        /* Header */
+        .header {
+            background: #1e293b;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
         
-        .games-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
-        .game-card { background: #111827; border: 1px solid #1f2937; border-radius: 14px; overflow: hidden; transition: transform 0.2s, border-color 0.2s; }
-        .game-card:hover { transform: translateY(-3px); border-color: #2563eb; }
-        .game-thumb { height: 140px; background: linear-gradient(135deg, #4f46e5, #7c3aed); display: flex; align-items: center; justify-content: center; font-size: 42px; color: #fff; }
-        .game-body { padding: 14px; }
-        .game-name { font-weight: 700; color: #fff; margin-bottom: 6px; }
-        .game-meta { color: #9ca3af; font-size: 13px; margin-bottom: 12px; }
-        .pill { display: inline-block; padding: 4px 10px; border-radius: 999px; background: #1f2937; color: #cbd5e1; font-size: 12px; margin-right: 6px; }
-        .play-link { display: inline-block; padding: 10px 12px; background: #2563eb; color: #fff; border-radius: 10px; font-weight: 600; }
-        .play-link:hover { background: #1d4ed8; }
+        .logo {
+            font-size: 24px;
+            font-weight: bold;
+            color: #fff;
+        }
         
-        .footer { max-width: 1100px; margin: 0 auto 30px; padding: 0 20px; text-align: center; color: #6b7280; font-size: 13px; }
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
         
-        @media (max-width: 640px) {
-            .hero h1 { font-size: 26px; }
+        .balance {
+            background: linear-gradient(135deg, #10b981, #059669);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+        }
+        
+        .auth-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.2s;
+            border: none;
+            cursor: pointer;
+        }
+        
+        .btn-primary {
+            background: #2563eb;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #1d4ed8;
+        }
+        
+        .btn-secondary {
+            background: transparent;
+            color: #9ca3af;
+            border: 1px solid #374151;
+        }
+        
+        .btn-secondary:hover {
+            background: #374151;
+            color: #fff;
+        }
+        
+        /* Navigation */
+        .nav {
+            background: #1e293b;
+            padding: 15px 20px;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+        
+        .nav-tabs {
+            display: inline-flex;
+            gap: 10px;
+        }
+        
+        .nav-tab {
+            padding: 10px 20px;
+            background: transparent;
+            border: 2px solid #334155;
+            border-radius: 10px;
+            color: #94a3b8;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 600;
+        }
+        
+        .nav-tab.active {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-color: transparent;
+            color: white;
+        }
+        
+        /* Main Content */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .section-title {
+            font-size: 24px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        /* Games Grid */
+        .games-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        
+        .game-card {
+            position: relative;
+            background: #1e293b;
+            border: 1px solid #2d3548;
+            border-radius: 15px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .game-card:hover {
+            transform: translateY(-5px);
+            border-color: #2563eb;
+        }
+        
+        .game-card:hover .play-overlay {
+            opacity: 1;
+        }
+        
+        .game-image {
+            position: relative;
+            width: 100%;
+            height: 240px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+            color: #fff;
+        }
+        
+        .game-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        .play-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.75);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .play-btn {
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            padding: 16px 32px;
+            border-radius: 50px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
+            transition: all 0.2s;
+        }
+        
+        .play-btn:hover {
+            background: #1d4ed8;
+            transform: scale(1.05);
+        }
+        
+        .play-btn::before {
+            content: '▶';
+            font-size: 18px;
+        }
+        
+        .game-info {
+            padding: 16px;
+            text-align: center;
+        }
+        
+        .game-name {
+            font-weight: 600;
+            font-size: 15px;
+            color: #fff;
+        }
+        
+        /* Mobile Menu */
+        .mobile-menu {
+            display: none;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #1e293b;
+            padding: 10px;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.3);
+        }
+        
+        .mobile-menu-items {
+            display: flex;
+            justify-content: space-around;
+        }
+        
+        .mobile-menu-item {
+            text-align: center;
+            color: #94a3b8;
+            font-size: 24px;
+            padding: 10px;
+            cursor: pointer;
+        }
+        
+        .mobile-menu-item.active {
+            color: #667eea;
+        }
+        
+        @media (max-width: 768px) {
+            .games-grid {
+                grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+                gap: 15px;
+            }
+            
+            .game-image {
+                height: 140px;
+                font-size: 48px;
+            }
+            
+            .mobile-menu {
+                display: block;
+            }
+            
+            .container {
+                padding-bottom: 80px;
+            }
+            
+            .user-menu .username {
+                display: none;
+            }
         }
     </style>
 </head>
 <body>
-    <header class="hero">
-        <h1>Play Top Casino Games</h1>
-        <p>Browse our live catalog. Log in or create an account to start playing.</p>
-        <div class="actions">
+    <!-- Header -->
+    <div class="header">
+        <div class="logo">🎰 Casino</div>
+        <div class="user-info">
             <?php if ($loggedIn): ?>
-                <a class="btn btn-primary" href="casino.php">Enter Lobby</a>
-                <a class="btn btn-secondary" href="profile.php">My Profile</a>
-            <?php else: ?>
-                <a class="btn btn-primary" href="login.php">Login</a>
-                <a class="btn btn-secondary" href="register.php">Create Account</a>
-            <?php endif; ?>
-        </div>
-    </header>
-
-    <main class="section">
-        <div class="section-title">
-            <h2>Featured Games</h2>
-            <small style="color:#9ca3af;">Showing up to 20 active titles</small>
-        </div>
-        <div class="games-grid">
-            <?php foreach ($games as $game): ?>
-                <div class="game-card">
-                    <div class="game-thumb">
-                        <?php if (!empty($game['image']) && file_exists($game['image'])): ?>
-                            <img src="<?php echo htmlspecialchars($game['image']); ?>" alt="<?php echo htmlspecialchars($game['name']); ?>" style="width:100%; height:100%; object-fit: cover;">
-                        <?php else: ?>
-                            <?php echo strtoupper(substr($game['name'], 0, 2)); ?>
-                        <?php endif; ?>
-                    </div>
-                    <div class="game-body">
-                        <div class="game-name"><?php echo htmlspecialchars($game['name']); ?></div>
-                        <div class="game-meta">
-                            <span class="pill"><?php echo htmlspecialchars($game['provider']); ?></span>
-                            <span class="pill"><?php echo htmlspecialchars($game['category']); ?></span>
-                        </div>
-                        <?php if ($loggedIn): ?>
-                            <a class="play-link" href="play_game.php?game_uid=<?php echo urlencode($game['game_uid']); ?>">Play now</a>
-                        <?php else: ?>
-                            <a class="play-link" href="login.php">Login to play</a>
-                        <?php endif; ?>
-                    </div>
+                <div class="balance">💰 <?php echo formatCurrency($balance, $userCurrency); ?></div>
+                <div class="auth-buttons">
+                    <a href="profile.php" class="btn btn-primary">Profile</a>
+                    <a href="logout.php" class="btn btn-secondary">Logout</a>
                 </div>
-            <?php endforeach; ?>
-            <?php if (empty($games)): ?>
-                <p style="color:#9ca3af;">No active games available yet.</p>
+            <?php else: ?>
+                <div class="auth-buttons">
+                    <a href="login.php" class="btn btn-primary">Login</a>
+                    <a href="register.php" class="btn btn-secondary">Sign Up</a>
+                </div>
             <?php endif; ?>
         </div>
-    </main>
-
-    <div class="footer">
-        <p>Secure gaming. Fair play. 24/7 availability.</p>
     </div>
+    
+    <!-- Navigation -->
+    <div class="nav">
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="showCategory('all')">🎮 All Games</button>
+            <button class="nav-tab" onclick="showCategory('slots')">🎰 Slots</button>
+            <button class="nav-tab" onclick="showCategory('cards')">🃏 Card Games</button>
+            <button class="nav-tab" onclick="showCategory('roulette')">🎡 Roulette</button>
+            <button class="nav-tab" onclick="showCategory('live')">📹 Live Casino</button>
+        </div>
+    </div>
+    
+    <!-- Main Content -->
+    <div class="container">
+        <h2 class="section-title">🔥 Popular Games</h2>
+        
+        <div class="games-grid" id="games-grid">
+            <!-- Games will be loaded here -->
+        </div>
+    </div>
+    
+    <!-- Mobile Bottom Menu -->
+    <div class="mobile-menu">
+        <div class="mobile-menu-items">
+            <div class="mobile-menu-item active">🎮</div>
+            <div class="mobile-menu-item" onclick="location.href='wallet.php'">💰</div>
+            <div class="mobile-menu-item" onclick="location.href='profile.php'">👤</div>
+        </div>
+    </div>
+    
+    <script>
+        const games = <?php echo json_encode(array_map(function($g) {
+            return [
+                'id' => $g['game_uid'],
+                'name' => $g['name'],
+                'icon' => $g['image'] && file_exists($g['image']) ? $g['image'] : '🎰',
+                'category' => strtolower($g['category']),
+                'provider' => $g['provider']
+            ];
+        }, $gamesFromDb)); ?>;
+        
+        function renderGames(filter = 'all') {
+            const grid = document.getElementById('games-grid');
+            const filtered = filter === 'all' ? games : games.filter(g => g.category === filter);
+            
+            grid.innerHTML = filtered.map(game => {
+                const isImage = game.icon.startsWith('images/');
+                const iconHtml = isImage 
+                    ? `<img src="${game.icon}" alt="${game.name}">` 
+                    : `<div style="font-size: 60px; display: flex; align-items: center; justify-content: center; height: 100%;">${game.icon}</div>`;
+                
+                return `
+                    <div class="game-card" onclick="playGame('${game.id}', '${game.name}')">
+                        <div class="game-image">${iconHtml}</div>
+                        <div class="game-name">${game.name}</div>
+                        <div class="play-overlay">
+                            <button class="play-btn">▶ Play</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function showCategory(category) {
+            document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('active'));
+            event.target.classList.add('active');
+            renderGames(category);
+        }
+        
+        function playGame(gameId, gameName) {
+            <?php if ($loggedIn): ?>
+            window.location.href = `play_game.php?game_id=${gameId}&game_name=${encodeURIComponent(gameName)}`;
+            <?php else: ?>
+            window.location.href = 'login.php';
+            <?php endif; ?>
+        }
+        
+        // Initial render
+        renderGames();
+        
+        // Install PWA prompt
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            // Show install button
+            console.log('PWA installable');
+        });
+    </script>
 </body>
 </html>

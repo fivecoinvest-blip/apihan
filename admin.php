@@ -528,7 +528,7 @@ $transactions = $pdo->query("
         <h1>Admin Dashboard</h1>
         <div>
             <span style="margin-right: 20px;"><?php echo htmlspecialchars($_SESSION['admin_username']); ?></span>
-            <a href="casino.php">View Casino</a>
+            <a href="index.php">View Casino</a>
             <a href="?logout=1" style="margin-left: 10px;">Logout</a>
         </div>
     </div>

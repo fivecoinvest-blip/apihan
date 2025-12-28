@@ -2,7 +2,7 @@
   "name": "Casino",
   "short_name": "Casino",
   "description": "Play casino games on any device",
-  "start_url": "/casino.php",
+  "start_url": "/index.php",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#667eea",
@@ -34,7 +34,7 @@
       "name": "Play Games",
       "short_name": "Play",
       "description": "Start playing casino games",
-      "url": "/casino.php",
+      "url": "/index.php",
       "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
     },
     {

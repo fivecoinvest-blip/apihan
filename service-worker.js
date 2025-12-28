@@ -1,7 +1,7 @@
 // Service Worker for PWA
 const CACHE_NAME = 'casino-v1';
 const urlsToCache = [
-  '/casino.php',
+  '/index.php',
   '/login.php',
   '/manifest.json'
 ];
