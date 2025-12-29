@@ -153,6 +153,18 @@ if (isset($_POST['register'])) {
         .logo {
             text-align: center;
             margin-bottom: 30px;
+            position: relative;
+        }
+        
+        .logo a {
+            text-decoration: none;
+            color: inherit;
+            display: inline-block;
+            transition: transform 0.3s;
+        }
+        
+        .logo a:hover {
+            transform: scale(1.05);
         }
         
         .logo h1 {
@@ -164,6 +176,27 @@ if (isset($_POST['register'])) {
         .logo p {
             color: #666;
             font-size: 14px;
+        }
+        
+        .back-link {
+            position: absolute;
+            top: -10px;
+            left: 0;
+            color: #667eea;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.3s;
+            padding: 8px 12px;
+            border-radius: 8px;
+        }
+        
+        .back-link:hover {
+            background: rgba(102, 126, 234, 0.1);
+            transform: translateX(-3px);
         }
         
         .tabs {
@@ -276,8 +309,11 @@ if (isset($_POST['register'])) {
 <body>
     <div class="container">
         <div class="logo">
-            <h1>🎰 Casino</h1>
-            <p>Play & Win Big</p>
+            <a href="index.php" class="back-link">← Back to Games</a>
+            <a href="index.php">
+                <h1>🎰 Casino</h1>
+                <p>Play & Win Big</p>
+            </a>
         </div>
         
         <?php if ($error): ?>
@@ -348,6 +384,16 @@ if (isset($_POST['register'])) {
         
         // Auto-format phone number input
         document.addEventListener('DOMContentLoaded', function() {
+            // Check URL parameter to show register tab
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('tab') === 'register') {
+                // Show register tab
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.form-container').forEach(f => f.classList.remove('active'));
+                document.querySelectorAll('.tab')[1].classList.add('active'); // Register tab
+                document.getElementById('register-form').classList.add('active');
+            }
+            
             const phoneInputs = document.querySelectorAll('input[type="tel"]');
             
             phoneInputs.forEach(input => {

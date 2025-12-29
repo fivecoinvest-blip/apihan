@@ -20,6 +20,9 @@ Full-featured casino platform with user authentication, game lobby, wallet manag
 - ✅ Secure API Integration with SoftAPI
 - ✅ Real-time Balance Updates via Encrypted Callbacks
 - ✅ Multiple Phone Number Format Support (09... or +639...)
+- ✅ Extended Session Management (4-hour timeout with auto keep-alive)
+- ✅ Form Resubmission Prevention (Post/Redirect/Get pattern)
+- ✅ Smart Game Loading (Hides timeout errors if game loads successfully)
 
 ---
 
@@ -33,6 +36,8 @@ casino/
 ├── logout.php             # Logout handler
 ├── admin.php              # Admin dashboard (games, users, history)
 ├── get_user_history.php   # AJAX endpoint for user transaction history
+├── session_config.php     # Extended session management (4-hour timeout)
+├── keep_alive.php         # Session keep-alive endpoint for long gameplay
 ├── wallet.php             # Wallet management (to be created)
 ├── profile.php            # User profile (to be created)
 ├── db_helper.php          # Database functions
@@ -489,11 +494,17 @@ total_bets, total_wins, rounds_played, started_at, ended_at, status
 ## 🔐 Security Features
 
 1. **Password Hashing**: bcrypt algorithm
-2. **Session Management**: PHP sessions with secure cookies
-3. **SQL Injection Prevention**: PDO prepared statements
-4. **XSS Protection**: htmlspecialchars() on outputs
-5. **CSRF Protection**: Session-based validation
-6. **API Encryption**: AES-256-ECB for SoftAPI
+2. **Extended Session Management**: 
+   - 4-hour session timeout (14,400 seconds)
+   - Automatic session keep-alive during gameplay
+   - Session regeneration every 30 minutes
+   - Secure cookies (HTTPOnly, Secure flags)
+   - Strict session mode enabled
+3. **Form Resubmission Prevention**: Post/Redirect/Get (PRG) pattern
+4. **SQL Injection Prevention**: PDO prepared statements
+5. **XSS Protection**: htmlspecialchars() on outputs
+6. **CSRF Protection**: Session-based validation
+7. **API Encryption**: AES-256-ECB for SoftAPI
 
 ---
 
@@ -531,6 +542,19 @@ total_bets, total_wins, rounds_played, started_at, ended_at, status
 - Clear browser cache
 - Check manifest.json is accessible
 - Ensure service-worker.js is in root directory
+
+### "Session Expired" / "Logged Out During Game"
+- Sessions now last 4 hours with automatic keep-alive
+- Games automatically ping server every 5 minutes
+- Check browser console for "Session kept alive" messages
+- Ensure keep_alive.php is accessible
+- Check PHP session.gc_maxlifetime setting (should be 14400)
+
+### "Connection Timeout" Error While Playing
+- Loading overlay now hides automatically when game loads
+- Game continues loading in background even if API is slow
+- Error messages are informational, not blocking
+- Check browser console for iframe load events
 
 ---
 
@@ -622,12 +646,22 @@ Safari: Share → Add to Home Screen
 ---
 
 **Last Updated**: December 29, 2025
-**Version**: 1.3.0
+**Version**: 1.4.0
 
-**Recent Changes:**
-- **Created consolidated update script** (update_jili_complete.php) - handles games + images in one command
-- **Automated image management** - 206/206 game images matched and linked
-- **Updated JILI games catalog to 206+ games** (143 new, 63 updated)
+**Recent Changes (v1.4.0):**
+- **Extended Session Management** - 4-hour timeout with automatic keep-alive
+- **Session Keep-Alive System** - Automatic ping every 5 minutes during gameplay
+- **Form Resubmission Prevention** - Post/Redirect/Get pattern on all forms
+- **Smart Game Loading** - Loading overlay with intelligent error handling
+- **Improved Error Display** - Timeout errors no longer block gameplay
+- **Security Enhancements** - Secure cookies, HTTPOnly, session regeneration
+- **Mobile-Responsive Admin Panel** - Full touch-friendly interface
+- **Infinite Scroll** - Both admin panel and game lobby auto-load content
+
+**Previous Changes (v1.3.0):**
+- Created consolidated update script (update_jili_complete.php)
+- Automated image management - 206/206 game images matched and linked
+- Updated JILI games catalog to 206+ games (143 new, 63 updated)
 - Added user tracking system (IP, device, browser, OS, login history)
 - Enhanced admin panel with user activity statistics
 - Improved edit user modal with dark theme

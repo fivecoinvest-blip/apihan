@@ -392,7 +392,7 @@ $totalGamesCount = $pdo->query("SELECT COUNT(*) FROM games WHERE is_active = 1")
             <?php else: ?>
                 <div class="auth-buttons">
                     <a href="login.php" class="btn btn-primary">Login</a>
-                    <a href="register.php" class="btn btn-secondary">Sign Up</a>
+                    <a href="login.php?tab=register" class="btn btn-secondary">Sign Up</a>
                 </div>
             <?php endif; ?>
         </div>
