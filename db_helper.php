@@ -1,7 +1,9 @@
 <?php
 /**
- * Database Helper Functions
+ * Database Helper Functions with Redis Caching
  */
+
+require_once __DIR__ . '/redis_helper.php';
 
 class Database {
     private static $instance = null;
@@ -43,9 +45,11 @@ class Database {
 
 class User {
     private $db;
+    private $cache;
     
     public function __construct() {
         $this->db = Database::getInstance()->getConnection();
+        $this->cache = RedisCache::getInstance();
     }
     
     public function register($phone, $password, $countryCode = '+639', $currency = 'PHP') {
@@ -161,15 +165,37 @@ class User {
     }
     
     public function getBalance($userId) {
+        // Try to get from cache first
+        $cacheKey = "user:balance:{$userId}";
+        $cachedBalance = $this->cache->get($cacheKey);
+        
+        if ($cachedBalance !== false) {
+            return (float)$cachedBalance;
+        }
+        
+        // Cache miss - get from database
         $stmt = $this->db->prepare("SELECT balance FROM users WHERE id = ?");
         $stmt->execute([$userId]);
         $result = $stmt->fetch();
-        return $result ? (float)$result['balance'] : 0;
+        $balance = $result ? (float)$result['balance'] : 0;
+        
+        // Store in cache for 5 minutes
+        $this->cache->set($cacheKey, $balance, RedisCache::CACHE_5_MINUTES);
+        
+        return $balance;
     }
     
     public function updateBalance($userId, $newBalance) {
         $stmt = $this->db->prepare("UPDATE users SET balance = ? WHERE id = ?");
-        return $stmt->execute([$newBalance, $userId]);
+        $result = $stmt->execute([$newBalance, $userId]);
+        
+        // Invalidate cache on update
+        if ($result) {
+            $this->cache->delete("user:balance:{$userId}");
+            $this->cache->delete("user:data:{$userId}");
+        }
+        
+        return $result;
     }
     
     public function addBalance($userId, $amount, $type = 'deposit', $description = null) {

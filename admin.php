@@ -5,8 +5,11 @@
 require_once 'session_config.php';
 require_once 'config.php';
 require_once 'db_helper.php';
+require_once 'redis_helper.php';
 require_once 'currency_helper.php';
 require_once 'settings_helper.php';
+
+$cache = RedisCache::getInstance();
 
 // Handle success/error messages from session
 $success = isset($_SESSION['success']) ? $_SESSION['success'] : null;
@@ -339,6 +342,10 @@ if (isset($_POST['upload_image']) && isset($_FILES['game_image'])) {
         if (move_uploaded_file($file['tmp_name'], $uploadPath)) {
             $stmt = $pdo->prepare("UPDATE games SET image = ? WHERE id = ?");
             $stmt->execute([$uploadPath, $gameId]);
+            
+            // Invalidate game caches
+            $cache->deletePattern('games:*');
+            
             $_SESSION['success'] = "Image uploaded successfully!";
         } else {
             $_SESSION['error'] = "Failed to upload image.";
@@ -361,6 +368,10 @@ if (isset($_POST['update_game'])) {
         $_POST['sort_order'],
         $_POST['game_id']
     ]);
+    
+    // Invalidate game caches
+    $cache->deletePattern('games:*');
+    
     $_SESSION['success'] = "Game updated successfully!";
     header("Location: admin.php");
     exit;
@@ -370,6 +381,10 @@ if (isset($_POST['update_game'])) {
 if (isset($_GET['delete'])) {
     $stmt = $pdo->prepare("DELETE FROM games WHERE id = ?");
     $stmt->execute([$_GET['delete']]);
+    
+    // Invalidate game caches
+    $cache->deletePattern('games:*');
+    
     $_SESSION['success'] = "Game deleted successfully!";
     header("Location: admin.php");
     exit;
@@ -394,6 +409,10 @@ if (isset($_POST['add_game'])) {
                 isset($_POST['is_active']) ? 1 : 0,
                 $_POST['sort_order']
             ]);
+            
+            // Invalidate game caches
+            $cache->deletePattern('games:*');
+            
             $_SESSION['success'] = "Game added successfully!";
         }
     } catch (PDOException $e) {
@@ -485,11 +504,24 @@ if (isset($_GET['load_games'])) {
     $offset = isset($_GET['offset']) ? intval($_GET['offset']) : 0;
     $limit = 20;
     
+    // Try cache first
+    $cacheKey = "admin:games:list:{$offset}:{$limit}";
+    $cachedGames = $cache->get($cacheKey);
+    
+    if ($cachedGames !== false) {
+        header('Content-Type: application/json');
+        echo json_encode($cachedGames);
+        exit;
+    }
+    
     $stmt = $pdo->prepare("SELECT * FROM games ORDER BY sort_order ASC, name ASC LIMIT ? OFFSET ?");
     $stmt->bindValue(1, $limit, PDO::PARAM_INT);
     $stmt->bindValue(2, $offset, PDO::PARAM_INT);
     $stmt->execute();
     $games = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Cache for 5 minutes (admins need fresher data)
+    $cache->set($cacheKey, $games, RedisCache::CACHE_5_MINUTES);
     
     header('Content-Type: application/json');
     echo json_encode($games);
@@ -499,10 +531,15 @@ if (isset($_GET['load_games'])) {
 // Initial load - get first 20 games
 $gamesPerLoad = 20;
 $totalGamesCount = $pdo->query("SELECT COUNT(*) FROM games")->fetchColumn();
-$stmt = $pdo->prepare("SELECT * FROM games ORDER BY sort_order ASC, name ASC LIMIT ?");
-$stmt->bindValue(1, $gamesPerLoad, PDO::PARAM_INT);
-$stmt->execute();
-$games = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Try cache first
+$cacheKey = "admin:games:initial:{$gamesPerLoad}";
+$games = $cache->remember($cacheKey, function() use ($pdo, $gamesPerLoad) {
+    $stmt = $pdo->prepare("SELECT * FROM games ORDER BY sort_order ASC, name ASC LIMIT ?");
+    $stmt->bindValue(1, $gamesPerLoad, PDO::PARAM_INT);
+    $stmt->execute();
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}, RedisCache::CACHE_5_MINUTES);
 
 // Get all users with tracking info
 $users = $pdo->query("

@@ -2,17 +2,19 @@
 require_once 'session_config.php';
 require_once 'config.php';
 require_once 'db_helper.php';
+require_once 'redis_helper.php';
 require_once 'currency_helper.php';
 
 $loggedIn = isset($_SESSION['user_id']);
 $balance = 0;
 $userCurrency = 'PHP';
 $username = '';
+$cache = RedisCache::getInstance();
 
 if ($loggedIn) {
     $userModel = new User();
     $currentUser = $userModel->getById($_SESSION['user_id']);
-    $balance = $userModel->getBalance($_SESSION['user_id']);
+    $balance = $userModel->getBalance($_SESSION['user_id']); // Already uses Redis cache
     $userCurrency = $currentUser['currency'] ?? 'PHP';
     $username = $currentUser['username'] ?? '';
     $_SESSION['currency'] = $userCurrency;
@@ -28,13 +30,22 @@ if (isset($_GET['load_games'])) {
     $category = isset($_GET['category']) ? $_GET['category'] : 'all';
     $limit = 20;
     
+    // Try cache first for paginated results
+    $cacheKey = "games:list:{$category}:{$offset}:{$limit}";
+    $cachedGames = $cache->get($cacheKey);
+    
+    if ($cachedGames !== false) {
+        header('Content-Type: application/json');
+        echo json_encode($cachedGames);
+        exit;
+    }
+    
     if ($category === 'all') {
         $stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 ORDER BY sort_order ASC, name ASC LIMIT ? OFFSET ?");
         $stmt->bindValue(1, $limit, PDO::PARAM_INT);
         $stmt->bindValue(2, $offset, PDO::PARAM_INT);
     } else {
         $stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 AND category = ? ORDER BY sort_order ASC, name ASC LIMIT ? OFFSET ?");
-        $stmt->execute([$category, $limit, $offset]);
         $stmt->bindValue(1, $category, PDO::PARAM_STR);
         $stmt->bindValue(2, $limit, PDO::PARAM_INT);
         $stmt->bindValue(3, $offset, PDO::PARAM_INT);
@@ -52,22 +63,34 @@ if (isset($_GET['load_games'])) {
         ];
     }, $games);
     
+    // Cache for 15 minutes
+    $cache->set($cacheKey, $result, RedisCache::CACHE_15_MINUTES);
+    
     header('Content-Type: application/json');
     echo json_encode($result);
     exit;
 }
 
-// Initial load - first 20 games
-$stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 ORDER BY sort_order ASC, name ASC LIMIT 20");
-$stmt->execute();
-$gamesFromDb = $stmt->fetchAll(PDO::FETCH_ASSOC);
+// Initial load - first 20 games (with caching)
+$cacheKey = "games:initial:20";
+$gamesFromDb = $cache->remember($cacheKey, function() use ($pdo) {
+    $stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 ORDER BY sort_order ASC, name ASC LIMIT 20");
+    $stmt->execute();
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}, RedisCache::CACHE_15_MINUTES);
 
-// Get unique categories for navigation
-$categoriesStmt = $pdo->query("SELECT DISTINCT category FROM games WHERE is_active = 1 ORDER BY category");
-$categories = $categoriesStmt->fetchAll(PDO::FETCH_COLUMN);
+// Get unique categories for navigation (with caching)
+$cacheKey = "games:categories";
+$categories = $cache->remember($cacheKey, function() use ($pdo) {
+    $categoriesStmt = $pdo->query("SELECT DISTINCT category FROM games WHERE is_active = 1 ORDER BY category");
+    return $categoriesStmt->fetchAll(PDO::FETCH_COLUMN);
+}, RedisCache::CACHE_1_HOUR);
 
-// Get total games count
-$totalGamesCount = $pdo->query("SELECT COUNT(*) FROM games WHERE is_active = 1")->fetchColumn();
+// Get total games count (with caching)
+$cacheKey = "games:total_count";
+$totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
+    return $pdo->query("SELECT COUNT(*) FROM games WHERE is_active = 1")->fetchColumn();
+}, RedisCache::CACHE_1_HOUR);
 ?>
 <!DOCTYPE html>
 <html lang="en">
