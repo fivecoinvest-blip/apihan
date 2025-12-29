@@ -18,6 +18,64 @@ if (isset($_POST['login'])) {
         $_SESSION['user_id'] = $loggedUser['id'];
         $_SESSION['username'] = $loggedUser['username'];
         $_SESSION['phone'] = $loggedUser['phone'];
+        
+        // Track user login activity
+        $db = Database::getInstance();
+        $pdo = $db->getConnection();
+        
+        // Get user IP address
+        $ip = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
+        if (isset($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+            $ip = $_SERVER['HTTP_X_FORWARDED_FOR'];
+        }
+        
+        // Get user agent and parse device/browser info
+        $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown';
+        $device = 'Unknown';
+        $browser = 'Unknown';
+        $os = 'Unknown';
+        
+        // Detect OS
+        if (preg_match('/Windows/i', $userAgent)) $os = 'Windows';
+        elseif (preg_match('/Mac|iPhone|iPad/i', $userAgent)) $os = 'iOS/Mac';
+        elseif (preg_match('/Android/i', $userAgent)) $os = 'Android';
+        elseif (preg_match('/Linux/i', $userAgent)) $os = 'Linux';
+        
+        // Detect Browser
+        if (preg_match('/Chrome/i', $userAgent)) $browser = 'Chrome';
+        elseif (preg_match('/Firefox/i', $userAgent)) $browser = 'Firefox';
+        elseif (preg_match('/Safari/i', $userAgent)) $browser = 'Safari';
+        elseif (preg_match('/Edge/i', $userAgent)) $browser = 'Edge';
+        
+        // Detect Device Type
+        if (preg_match('/Mobile|Android|iPhone/i', $userAgent)) $device = 'Mobile';
+        elseif (preg_match('/Tablet|iPad/i', $userAgent)) $device = 'Tablet';
+        else $device = 'Desktop';
+        
+        // Update user tracking info
+        $stmt = $pdo->prepare("
+            UPDATE users SET 
+                last_login = NOW(), 
+                last_ip = ?,
+                last_device = ?,
+                last_browser = ?,
+                last_os = ?,
+                login_count = login_count + 1
+            WHERE id = ?
+        ");
+        $stmt->execute([$ip, $device, $browser, $os, $loggedUser['id']]);
+        
+        // Log login to history table
+        $stmt = $pdo->prepare("
+            INSERT INTO login_history 
+            (user_id, ip_address, device, browser, os, login_time) 
+            VALUES (?, ?, ?, ?, ?, NOW())
+        ");
+        $stmt->execute([$loggedUser['id'], $ip, $device, $browser, $os]);
+        
+        // Store session ID for logout tracking
+        $_SESSION['login_history_id'] = $pdo->lastInsertId();
+        
         header('Location: index.php');
         exit;
     } else {

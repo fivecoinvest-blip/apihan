@@ -150,6 +150,28 @@ if (isset($_POST['update_user_balance'])) {
     $success = "User balance updated successfully!";
 }
 
+// Handle user information update
+if (isset($_POST['update_user_info'])) {
+    $userId = $_POST['user_id'];
+    $username = $_POST['username'];
+    $phone = $_POST['phone'];
+    $balance = $_POST['balance'];
+    $currency = $_POST['currency'];
+    $status = $_POST['status'];
+    
+    $stmt = $pdo->prepare("
+        UPDATE users SET 
+            username = ?,
+            phone = ?,
+            balance = ?,
+            currency = ?,
+            status = ?
+        WHERE id = ?
+    ");
+    $stmt->execute([$username, $phone, $balance, $currency, $status, $userId]);
+    $success = "User information updated successfully!";
+}
+
 // Handle settings update
 if (isset($_POST['update_settings'])) {
     $settingsToUpdate = [
@@ -195,8 +217,16 @@ $totalRevenue = $pdo->query("SELECT SUM(amount) FROM transactions WHERE type = '
 // Get all games
 $games = $pdo->query("SELECT * FROM games ORDER BY sort_order ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
-// Get all users
-$users = $pdo->query("SELECT id, username, phone, balance, currency, created_at, last_login, status FROM users ORDER BY created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
+// Get all users with tracking info
+$users = $pdo->query("
+    SELECT 
+        id, username, phone, balance, currency, 
+        created_at, last_login, status,
+        last_ip, last_device, last_browser, last_os, login_count,
+        total_deposits, total_withdrawals, total_bets, total_wins
+    FROM users 
+    ORDER BY created_at DESC
+")->fetchAll(PDO::FETCH_ASSOC);
 
 // Get most active players (top 10 by total bets)
 $topPlayers = $pdo->query("
@@ -413,7 +443,7 @@ $transactions = $pdo->query("
         .btn-danger:hover { background: #b91c1c; }
         .game-grid { 
             display: grid; 
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); 
+            grid-template-columns: repeat(10, 1fr); 
             gap: 16px;
             padding: 24px;
         }
@@ -436,6 +466,24 @@ $transactions = $pdo->query("
             justify-content: center; 
             color: #4b5563; 
             font-size: 36px;
+            font-weight: 600;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .game-image:hover::after {
+            content: '📷 Click to Upload';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 14px;
             font-weight: 600;
         }
         .game-image img { width: 100%; height: 100%; object-fit: cover; }
@@ -516,10 +564,22 @@ $transactions = $pdo->query("
             line-height: 1;
         }
         .close:hover { color: #ffffff; }
+        @media (max-width: 1600px) {
+            .game-grid { grid-template-columns: repeat(8, 1fr); }
+        }
+        @media (max-width: 1200px) {
+            .game-grid { grid-template-columns: repeat(6, 1fr); }
+        }
+        @media (max-width: 900px) {
+            .game-grid { grid-template-columns: repeat(4, 1fr); }
+        }
         @media (max-width: 768px) {
-            .game-grid { grid-template-columns: 1fr; }
+            .game-grid { grid-template-columns: repeat(3, 1fr); }
             .stats { grid-template-columns: 1fr; }
             .tabs { overflow-x: scroll; }
+        }
+        @media (max-width: 600px) {
+            .game-grid { grid-template-columns: repeat(2, 1fr); }
         }
     </style>
 </head>
@@ -583,7 +643,7 @@ $transactions = $pdo->query("
             <div class="game-grid">
                 <?php foreach ($games as $game): ?>
                     <div class="game-card <?php echo $game['is_active'] ? '' : 'inactive'; ?>">
-                        <div class="game-image">
+                        <div class="game-image" onclick="uploadImage(<?php echo $game['id']; ?>, '<?php echo htmlspecialchars($game['name'], ENT_QUOTES); ?>')">
                             <?php if ($game['image'] && file_exists($game['image'])): ?>
                                 <img src="<?php echo htmlspecialchars($game['image']); ?>" alt="<?php echo htmlspecialchars($game['name']); ?>">
                             <?php else: ?>
@@ -600,7 +660,6 @@ $transactions = $pdo->query("
                             </div>
                             <div class="game-actions">
                                 <button class="btn btn-small" onclick="editGame(<?php echo htmlspecialchars(json_encode($game)); ?>)">✏️ Edit</button>
-                                <button class="btn btn-small" onclick="uploadImage(<?php echo $game['id']; ?>, '<?php echo htmlspecialchars($game['name']); ?>')">📷 Upload Image</button>
                                 <a href="?delete=<?php echo $game['id']; ?>" class="btn btn-small btn-danger" onclick="return confirm('Delete this game?')">🗑️ Delete</a>
                             </div>
                         </div>
@@ -621,6 +680,9 @@ $transactions = $pdo->query("
                             <th>Phone</th>
                             <th>Balance</th>
                             <th>Status</th>
+                            <th>Device</th>
+                            <th>Last IP</th>
+                            <th>Logins</th>
                             <th>Registered</th>
                             <th>Last Login</th>
                             <th>Actions</th>
@@ -640,11 +702,24 @@ $transactions = $pdo->query("
                                         <?php echo ucfirst($user['status']); ?>
                                     </span>
                                 </td>
-                                <td><?php echo date('M d, Y', strtotime($user['created_at'])); ?></td>
-                                <td><?php echo $user['last_login'] ? date('M d, Y H:i', strtotime($user['last_login'])) : 'Never'; ?></td>
                                 <td>
-                                    <button class="btn btn-small" onclick="editUserBalance(<?php echo $user['id']; ?>, '<?php echo htmlspecialchars($user['username']); ?>', <?php echo $user['balance']; ?>, '<?php echo $userCurrency; ?>')">💰 Edit Balance</button>
+                                    <?php if ($user['last_device']): ?>
+                                        <span style="font-size: 12px;">
+                                            <?php echo htmlspecialchars($user['last_device']); ?><br>
+                                            <small style="color: #64748b;"><?php echo htmlspecialchars($user['last_browser'] ?? 'Unknown'); ?> | <?php echo htmlspecialchars($user['last_os'] ?? 'Unknown'); ?></small>
+                                        </span>
+                                    <?php else: ?>
+                                        <small style="color: #64748b;">N/A</small>
+                                    <?php endif; ?>
+                                </td>
+                                <td><small><?php echo htmlspecialchars($user['last_ip'] ?? 'N/A'); ?></small></td>
+                                <td><span class="badge badge-info"><?php echo $user['login_count'] ?? 0; ?></span></td>
+                                <td><?php echo date('M d, Y', strtotime($user['created_at'])); ?></td>
+                                <td><?php echo $user['last_login'] ? date('M d, H:i', strtotime($user['last_login'])) : 'Never'; ?></td>
+                                <td>
+                                    <button class="btn btn-small" onclick="editUser(<?php echo htmlspecialchars(json_encode($user)); ?>)">✏️ Edit</button>
                                     <button class="btn btn-small" onclick="viewUserHistory(<?php echo $user['id']; ?>, '<?php echo htmlspecialchars($user['username']); ?>')">📊 History</button>
+                                    <button class="btn btn-small" onclick="viewLoginHistory(<?php echo $user['id']; ?>, '<?php echo htmlspecialchars($user['username']); ?>')">🔐 Logins</button>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -945,6 +1020,85 @@ $transactions = $pdo->query("
         </div>
     </div>
 
+    <!-- Edit User Info Modal -->
+    <div id="editUserModal" class="modal">
+        <div class="modal-content" style="max-width: 850px;">
+            <span class="close" onclick="hideModal('editUserModal')">&times;</span>
+            <h2 style="margin-bottom: 25px; color: #1e293b; font-size: 24px;">✏️ Edit User Information</h2>
+            <form method="POST">
+                <input type="hidden" name="user_id" id="edit_user_id">
+                
+                <!-- User Details Card -->
+                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; margin-bottom: 20px; color: white;">
+                    <h3 style="margin: 0 0 15px 0; font-size: 16px; opacity: 0.9;">👤 Account Details</h3>
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
+                        <div class="form-group">
+                            <label style="color: white; opacity: 0.9; font-weight: 500;">Username</label>
+                            <input type="text" name="username" id="edit_username" required style="background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 12px; border-radius: 8px; width: 100%; font-size: 14px;">
+                        </div>
+                        <div class="form-group">
+                            <label style="color: white; opacity: 0.9; font-weight: 500;">Phone Number</label>
+                            <input type="text" name="phone" id="edit_phone" required style="background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 12px; border-radius: 8px; width: 100%; font-size: 14px;">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Balance & Settings Card -->
+                <div style="background: #0f1626; padding: 20px; border-radius: 12px; margin-bottom: 20px; border: 1px solid #2d3548;">
+                    <h3 style="margin: 0 0 15px 0; font-size: 16px; color: #e5e7eb;">💰 Balance & Settings</h3>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
+                        <div class="form-group">
+                            <label style="font-weight: 500; color: #9ca3af; font-size: 13px; margin-bottom: 8px; display: block;">Balance</label>
+                            <input type="number" step="0.01" name="balance" id="edit_balance" required style="padding: 12px; border: 2px solid #2d3548; border-radius: 8px; width: 100%; font-size: 16px; font-weight: 600; color: #10b981; background: #1a1f36;">
+                        </div>
+                        <div class="form-group">
+                            <label style="font-weight: 500; color: #9ca3af; font-size: 13px; margin-bottom: 8px; display: block;">Currency</label>
+                            <select name="currency" id="edit_currency" style="padding: 12px; border: 2px solid #2d3548; border-radius: 8px; width: 100%; font-size: 14px; background: #1a1f36; color: #e5e7eb;">
+                                <option value="PHP">PHP (₱)</option>
+                                <option value="USD">USD ($)</option>
+                                <option value="EUR">EUR (€)</option>
+                                <option value="GBP">GBP (£)</option>
+                                <option value="JPY">JPY (¥)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label style="font-weight: 500; color: #9ca3af; font-size: 13px; margin-bottom: 8px; display: block;">Status</label>
+                            <select name="status" id="edit_status" style="padding: 12px; border: 2px solid #2d3548; border-radius: 8px; width: 100%; font-size: 14px; background: #1a1f36; color: #e5e7eb;">
+                                <option value="active">✅ Active</option>
+                                <option value="suspended">⏸️ Suspended</option>
+                                <option value="banned">🚫 Banned</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tracking Information Card -->
+                <div id="edit_tracking_info"></div>
+                
+                <div style="display: flex; gap: 10px; margin-top: 20px;">
+                    <button type="submit" name="update_user_info" class="btn" style="flex: 1; padding: 15px; font-size: 16px; font-weight: 600; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; border-radius: 10px; cursor: pointer; color: white;">
+                        💾 Save Changes
+                    </button>
+                    <button type="button" onclick="hideModal('editUserModal')" style="padding: 15px 30px; font-size: 16px; background: #e2e8f0; border: none; border-radius: 10px; cursor: pointer; color: #475569; font-weight: 600;">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- View Login History Modal -->
+    <div id="loginHistoryModal" class="modal">
+        <div class="modal-content" style="max-width: 1000px;">
+            <span class="close" onclick="hideModal('loginHistoryModal')">&times;</span>
+            <h2>User Login History</h2>
+            <p id="login_history_username" style="color: #666; margin-bottom: 20px;"></p>
+            <div id="login_history_content" style="max-height: 500px; overflow-y: auto;">
+                Loading...
+            </div>
+        </div>
+    </div>
+
     <!-- Add Game Modal -->
     <div id="addGameModal" class="modal">
         <div class="modal-content">
@@ -1039,6 +1193,7 @@ $transactions = $pdo->query("
                 <div class="form-group">
                     <label>Select Image</label>
                     <input type="file" name="game_image" id="game_image_input" accept="image/*" required>
+                    <small style="color: #9ca3af;">Image will upload automatically when selected</small>
                 </div>
                 <div id="upload_progress" style="display: none; margin-bottom: 15px;">
                     <div style="background: #e5e7eb; border-radius: 4px; height: 6px; overflow: hidden;">
@@ -1046,7 +1201,7 @@ $transactions = $pdo->query("
                     </div>
                     <p id="upload_status" style="font-size: 13px; color: #666; margin-top: 8px;"></p>
                 </div>
-                <button type="submit" id="upload_btn" class="btn">Upload Image</button>
+                <button type="submit" id="upload_btn" class="btn" style="display: none;">Upload Image</button>
             </form>
         </div>
     </div>
@@ -1059,6 +1214,21 @@ $transactions = $pdo->query("
                 alert('✅ Game added successfully!');
                 // Remove the success parameter from URL
                 window.history.replaceState({}, document.title, window.location.pathname);
+            }
+            
+            // Auto-upload on file selection
+            const fileInput = document.getElementById('game_image_input');
+            if (fileInput) {
+                fileInput.addEventListener('change', function(e) {
+                    if (this.files && this.files.length > 0) {
+                        const form = document.getElementById('uploadImageForm');
+                        const submitEvent = new Event('submit', {
+                            bubbles: true,
+                            cancelable: true
+                        });
+                        form.dispatchEvent(submitEvent);
+                    }
+                });
             }
         });
         
@@ -1078,6 +1248,118 @@ $transactions = $pdo->query("
             // Show selected tab
             document.getElementById(tabName + '-tab').classList.add('active');
             event.target.classList.add('active');
+        }
+        
+        function editUser(user) {
+            document.getElementById('edit_user_id').value = user.id;
+            document.getElementById('edit_username').value = user.username;
+            document.getElementById('edit_phone').value = user.phone;
+            document.getElementById('edit_balance').value = user.balance;
+            document.getElementById('edit_currency').value = user.currency || 'PHP';
+            document.getElementById('edit_status').value = user.status;
+            
+            const netPL = (parseFloat(user.total_wins || 0) - parseFloat(user.total_bets || 0));
+            const plColor = netPL >= 0 ? '#10b981' : '#ef4444';
+            const plIcon = netPL >= 0 ? '📈' : '📉';
+            
+            // Display enhanced tracking info
+            document.getElementById('edit_tracking_info').innerHTML = `
+                <div style="background: #1a1f36; padding: 20px; border-radius: 12px; border: 1px solid #2d3548;">
+                    <h3 style="margin: 0 0 15px 0; font-size: 16px; color: #e5e7eb;">📊 User Activity & Statistics</h3>
+                    
+                    <!-- Statistics Grid -->
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;">
+                        <div style="background: linear-gradient(135deg, #3b82f6, #2563eb); padding: 15px; border-radius: 10px; text-align: center; color: white;">
+                            <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px;">${user.login_count || 0}</div>
+                            <div style="font-size: 12px; opacity: 0.9;">🔐 Total Logins</div>
+                        </div>
+                        <div style="background: linear-gradient(135deg, #f59e0b, #d97706); padding: 15px; border-radius: 10px; text-align: center; color: white;">
+                            <div style="font-size: 20px; font-weight: bold; margin-bottom: 5px;">₱${parseFloat(user.total_bets || 0).toFixed(2)}</div>
+                            <div style="font-size: 12px; opacity: 0.9;">🎲 Total Bets</div>
+                        </div>
+                        <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 15px; border-radius: 10px; text-align: center; color: white;">
+                            <div style="font-size: 20px; font-weight: bold; margin-bottom: 5px;">₱${parseFloat(user.total_wins || 0).toFixed(2)}</div>
+                            <div style="font-size: 12px; opacity: 0.9;">🏆 Total Wins</div>
+                        </div>
+                        <div style="background: linear-gradient(135deg, ${plColor}, ${plColor}); padding: 15px; border-radius: 10px; text-align: center; color: white;">
+                            <div style="font-size: 20px; font-weight: bold; margin-bottom: 5px;">₱${netPL.toFixed(2)}</div>
+                            <div style="font-size: 12px; opacity: 0.9;">${plIcon} Net P/L</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Device & Session Info -->
+                    <div style="background: #0f1626; padding: 15px; border-radius: 10px; border: 1px solid #2d3548;">
+                        <h4 style="margin: 0 0 12px 0; font-size: 14px; color: #e5e7eb; font-weight: 600;">🖥️ Last Session Information</h4>
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+                            <div style="padding: 10px; background: #1a1f36; border-radius: 6px; border: 1px solid #2d3548;">
+                                <div style="font-size: 11px; color: #9ca3af; margin-bottom: 4px;">IP Address</div>
+                                <div style="font-size: 13px; color: #e5e7eb; font-weight: 600; font-family: monospace;">${user.last_ip || 'Not available'}</div>
+                            </div>
+                            <div style="padding: 10px; background: #1a1f36; border-radius: 6px; border: 1px solid #2d3548;">
+                                <div style="font-size: 11px; color: #9ca3af; margin-bottom: 4px;">Device Type</div>
+                                <div style="font-size: 13px; color: #e5e7eb; font-weight: 600;">${user.last_device || 'Unknown'}</div>
+                            </div>
+                            <div style="padding: 10px; background: #1a1f36; border-radius: 6px; border: 1px solid #2d3548;">
+                                <div style="font-size: 11px; color: #9ca3af; margin-bottom: 4px;">Browser</div>
+                                <div style="font-size: 13px; color: #e5e7eb; font-weight: 600;">${user.last_browser || 'Unknown'}</div>
+                            </div>
+                            <div style="padding: 10px; background: #1a1f36; border-radius: 6px; border: 1px solid #2d3548;">
+                                <div style="font-size: 11px; color: #9ca3af; margin-bottom: 4px;">Operating System</div>
+                                <div style="font-size: 13px; color: #e5e7eb; font-weight: 600;">${user.last_os || 'Unknown'}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            showModal('editUserModal');
+        }
+        
+        function viewLoginHistory(userId, username) {
+            document.getElementById('login_history_username').textContent = 'Login History: ' + username;
+            showModal('loginHistoryModal');
+            
+            // Fetch login history via AJAX
+            fetch('get_login_history.php?user_id=' + userId)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success && data.logins.length > 0) {
+                        let html = '<table style="width: 100%;"><thead><tr>' +
+                            '<th>Login Time</th><th>Logout Time</th><th>Duration</th><th>IP Address</th><th>Device</th><th>Browser</th><th>OS</th>' +
+                            '</tr></thead><tbody>';
+                        
+                        data.logins.forEach(login => {
+                            const duration = login.session_duration ? formatDuration(login.session_duration) : 'Active';
+                            html += `<tr>
+                                <td>${login.login_time}</td>
+                                <td>${login.logout_time || '-'}</td>
+                                <td>${duration}</td>
+                                <td><small>${login.ip_address || 'N/A'}</small></td>
+                                <td>${login.device || 'N/A'}</td>
+                                <td>${login.browser || 'N/A'}</td>
+                                <td>${login.os || 'N/A'}</td>
+                            </tr>`;
+                        });
+                        
+                        html += '</tbody></table>';
+                        document.getElementById('login_history_content').innerHTML = html;
+                    } else {
+                        document.getElementById('login_history_content').innerHTML = '<p>No login history found.</p>';
+                    }
+                })
+                .catch(error => {
+                    document.getElementById('login_history_content').innerHTML = '<p>Error loading login history.</p>';
+                });
+        }
+        
+        function formatDuration(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            
+            if (hours > 0) return `${hours}h ${minutes}m`;
+            if (minutes > 0) return `${minutes}m ${secs}s`;
+            return `${secs}s`;
         }
         
         function editUserBalance(userId, username, currentBalance, currency) {

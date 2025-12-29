@@ -169,9 +169,15 @@ function processGameCallback(string $userId, float $betAmount, float $winAmount,
             $newBalance = 0;
         }
         
-        // Update user balance in database
-        $stmt = $pdo->prepare("UPDATE users SET balance = ? WHERE id = ?");
-        $stmt->execute([$newBalance, $userId]);
+        // Update user balance and betting totals in database
+        $stmt = $pdo->prepare("
+            UPDATE users SET 
+                balance = ?,
+                total_bets = total_bets + ?,
+                total_wins = total_wins + ?
+            WHERE id = ?
+        ");
+        $stmt->execute([$newBalance, $betAmount, $winAmount, $userId]);
         
         // Save transaction to database
         $stmt = $pdo->prepare("

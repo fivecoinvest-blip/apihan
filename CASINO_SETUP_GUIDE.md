@@ -8,7 +8,7 @@ Full-featured casino platform with user authentication, game lobby, wallet manag
 - ✅ Auto-generated Usernames
 - ✅ Multi-Currency Support (Auto-detects location: PHP, USD, EUR, GBP, JPY, etc.)
 - ✅ Real-time Balance Management (Database-backed with transactions)
-- ✅ 58+ JILI Games (Database-managed with admin controls)
+- ✅ 206+ JILI Games (Database-managed with admin controls)
 - ✅ Admin Dashboard:
   - User Management (view, edit balance, history)
   - Game Management (add, edit, upload images)
@@ -38,7 +38,8 @@ casino/
 ├── db_helper.php          # Database functions
 ├── currency_helper.php    # Currency formatting and detection
 ├── setup_database.php     # Database setup script
-├── setup_games_table.php  # Game database setup (58 JILI games)
+├── setup_games_table.php  # Initial game database setup
+├── update_jili_games.php  # Update JILI games (206 games)
 ├── setup_admin.php        # Admin account creation
 ├── migrate_currency.php   # Currency migration script
 ├── config.php             # API configuration
@@ -63,8 +64,8 @@ Run the database setup scripts in order:
 # Create main database and user tables
 php setup_database.php
 
-# Add 58 JILI games to database
-php setup_games_table.php
+# Add JILI games to database (206 games)
+php update_jili_games.php
 
 # Create admin account (username: admin, password: admin123)
 php setup_admin.php
@@ -78,7 +79,7 @@ This creates:
 - `transactions` table - Financial transactions (bets, wins, deposits, withdrawals)
 - `game_sessions` table - Game history
 - `user_preferences` table - User settings
-- `games` table - 58 JILI games with metadata
+- `games` table - 206+ JILI games with metadata
 - `admin_users` table - Admin authentication
 
 ### 2. Update config.php
@@ -265,7 +266,7 @@ Real-time balance display in header with currency symbol
 - Total Revenue
 
 **2. Game Management:**
-- View all 58 JILI games
+- View all 206+ JILI games
 - Add new games
 - Edit game details (name, provider, category)
 - Upload custom game images
@@ -306,6 +307,19 @@ php setup_admin.php
 
 ## 🔧 Customization
 
+### Update JILI Games Database
+
+To update all JILI games from the latest list:
+
+```bash
+php update_jili_games.php
+```
+
+This script will:
+- Add new games from JILI catalog
+- Update existing games with correct names/categories
+- Show detailed import summary
+
 ### Add More Games via Admin Panel
 
 1. Login to admin panel
@@ -315,7 +329,7 @@ php setup_admin.php
    - Game UID (for API launch)
    - Game Name
    - Provider (JILI, Pragmatic, etc.)
-   - Category (Slots, Table, etc.)
+   - Category (Slots, Table, Fishing, Arcade)
 5. Upload game image
 6. Set active status
 
@@ -592,9 +606,15 @@ Safari: Share → Add to Home Screen
 ---
 
 **Last Updated**: December 29, 2025
-**Version**: 1.1.0
+**Version**: 1.2.0
 
 **Recent Changes:**
+- **Updated JILI games catalog to 206+ games** (143 new, 63 updated)
+- Added user tracking system (IP, device, browser, OS, login history)
+- Enhanced admin panel with user activity statistics
+- Improved edit user modal with dark theme
+- Added session duration tracking
+- Added betting totals tracking (total_bets, total_wins)
 - Moved casino.php to index.php as main page
 - Removed /apihan/ subdirectory
 - Added SSL certificate (self-signed)
