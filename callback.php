@@ -9,6 +9,7 @@
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/db_helper.php';
+require_once __DIR__ . '/redis_helper.php';
 
 // Set response header
 header('Content-Type: application/json; charset=utf-8');
@@ -178,6 +179,11 @@ function processGameCallback(string $userId, float $betAmount, float $winAmount,
             WHERE id = ?
         ");
         $stmt->execute([$newBalance, $betAmount, $winAmount, $userId]);
+        
+        // Invalidate Redis cache for user balance
+        $cache = RedisCache::getInstance();
+        $cache->delete("user:balance:{$userId}");
+        $cache->delete("user:data:{$userId}");
         
         // Save transaction to database
         $stmt = $pdo->prepare("
