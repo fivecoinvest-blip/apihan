@@ -151,11 +151,28 @@ if (isset($_POST['register'])) {
             position: relative;
         }
         
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            color: #667eea;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        
+        .back-link:hover {
+            background: rgba(102, 126, 234, 0.1);
+            transform: translateX(-3px);
+        }
+        
         .logo {
             text-align: center;
             margin-bottom: 30px;
-            position: relative;
-            padding-top: 10px;
         }
         
         .logo a {
@@ -178,27 +195,6 @@ if (isset($_POST['register'])) {
         .logo p {
             color: #666;
             font-size: 14px;
-        }
-        
-        .back-link {
-            position: absolute;
-            top: 0;
-            left: 0;
-            color: #667eea;
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            transition: all 0.3s;
-            padding: 8px 12px;
-            border-radius: 8px;
-        }
-        
-        .back-link:hover {
-            background: rgba(102, 126, 234, 0.1);
-            transform: translateX(-3px);
         }
         
         .tabs {
@@ -327,6 +323,10 @@ if (isset($_POST['register'])) {
                 border-radius: 16px;
             }
             
+            .logo {
+                margin-bottom: 25px;
+            }
+            
             .logo h1 {
                 font-size: 32px;
             }
@@ -350,23 +350,14 @@ if (isset($_POST['register'])) {
                 max-width: 100%;
             }
             
-            .logo {
-                margin-bottom: 25px;
-            }
-            
-            .logo h1 {
-                font-size: 28px;
-            }
-            
-            .logo p {
-                font-size: 13px;
-            }
-            
             .back-link {
-                position: relative;
-                display: inline-flex;
-                margin-bottom: 15px;
                 font-size: 13px;
+                padding: 6px 10px;
+                margin-bottom: 15px;
+            }
+            
+            .logo {
+                margin-bottom: 20px;
             }
             
             .tabs {
@@ -424,8 +415,8 @@ if (isset($_POST['register'])) {
 </head>
 <body>
     <div class="container">
+        <a href="index.php" class="back-link">← Back to Games</a>
         <div class="logo">
-            <a href="index.php" class="back-link">← Back to Games</a>
             <a href="index.php">
                 <h1>🎰 Casino</h1>
                 <p>Play & Win Big</p>
