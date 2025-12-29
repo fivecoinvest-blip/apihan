@@ -1,0 +1,49 @@
+# Files to remove - Analysis
+
+# Old/Unused Files:
+admin_backup.php          # Backup file - not needed
+casino.php                # Old main page, replaced by index.php
+index_old_test.php        # Old test file
+example_launch.php        # Example/test file
+simple_launch.php         # Test file
+test_api_direct.php       # Test file
+test_launch.php           # Test file
+test_deployment.sh        # Test script
+return.php                # Not used in current flow
+
+# Redundant Helper Files:
+helpers.php               # Check if actually used
+currency_codes.php        # Check if used (currency_helper.php exists)
+language_codes.php        # Not currently using multi-language
+balance_helper.php        # Functions likely in db_helper.php
+
+# Setup Scripts (keep for reference, can be moved to /setup/):
+add_user_tracking.php     # One-time setup
+migrate_currency.php      # One-time migration
+set_all_php_currency.php  # One-time script
+setup_admin.php           # Keep - needed for admin reset
+setup_database.php        # Keep - needed for fresh install
+setup_game_plays_table.php
+setup_games_table.php
+setup_settings_table.php
+rename_game_images.php    # One-time script
+update_game_images.php    # Legacy - replaced by update_jili_complete.php
+update_jili_games.php     # Legacy - replaced by update_jili_complete.php
+
+# Server Setup Scripts (can be moved):
+install_webserver.sh
+setup_server.sh
+quick_server_check.sh
+server_check.php
+deploy.sh
+
+# Utility Scripts (check usage):
+get_login_history.php
+upload_game_image.php     # Check if used by admin panel
+view_balances.php         # Debug tool
+
+# Docs (keep main ones):
+DEPLOYMENT.md             # Check if merged into CASINO_SETUP_GUIDE.md
+README.md                 # Keep
+API_DOCUMENTATION.md      # Keep
+CASINO_SETUP_GUIDE.md     # Keep (main docs)
