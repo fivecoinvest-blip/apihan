@@ -407,7 +407,7 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
         <div class="logo">🎰 Casino</div>
         <div class="user-info">
             <?php if ($loggedIn): ?>
-                <div class="balance">💰 <?php echo formatCurrency($balance, $userCurrency); ?></div>
+                <div class="balance" id="user-balance" data-currency="<?php echo $userCurrency; ?>">💰 <?php echo formatCurrency($balance, $userCurrency); ?></div>
                 <div class="auth-buttons">
                     <a href="profile.php" class="btn btn-primary">Profile</a>
                     <a href="logout.php" class="btn btn-secondary">Logout</a>
@@ -476,36 +476,6 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
         let hasMoreGames = true;
         let totalGames = <?php echo $totalGamesCount; ?>;
         const loggedIn = <?php echo $loggedIn ? 'true' : 'false'; ?>;
-        
-        // Listen for balance updates from game window
-        window.addEventListener('message', function(event) {
-            if (event.data && event.data.type === 'balanceUpdate') {
-                console.log('Received balance update:', event.data.formatted);
-                
-                // Update balance display
-                const balanceElement = document.querySelector('.balance');
-                if (balanceElement) {
-                    balanceElement.textContent = '💰 ' + event.data.formatted;
-                }
-            }
-        });
-        
-        // Poll for balance updates every 15 seconds when logged in
-        if (loggedIn) {
-            setInterval(function() {
-                fetch('get_balance.php')
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            const balanceElement = document.querySelector('.balance');
-                            if (balanceElement) {
-                                balanceElement.textContent = '💰 ' + data.formatted;
-                            }
-                        }
-                    })
-                    .catch(error => console.error('Balance update failed:', error));
-            }, 15000); // Check every 15 seconds
-        }
         
         // Initial games from PHP
         const initialGames = <?php echo json_encode(array_map(function($g) {
@@ -664,6 +634,35 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
             deferredPrompt = e;
             console.log('PWA installable');
         });
+        
+        // Real-time balance updates (if logged in)
+        <?php if ($loggedIn): ?>
+        function updateBalance() {
+            fetch('get_balance.php')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        const balanceElement = document.getElementById('user-balance');
+                        if (balanceElement) {
+                            const currency = balanceElement.dataset.currency || 'PHP';
+                            const symbol = currency === 'PHP' ? '₱' : '$';
+                            balanceElement.textContent = '💰 ' + symbol + ' ' + parseFloat(data.balance).toFixed(2);
+                        }
+                    }
+                })
+                .catch(error => console.error('Balance update failed:', error));
+        }
+        
+        // Update balance every 30 seconds
+        setInterval(updateBalance, 30000);
+        
+        // Update balance when page becomes visible (user returns from game)
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) {
+                updateBalance();
+            }
+        });
+        <?php endif; ?>
     </script>
 </body>
 </html>

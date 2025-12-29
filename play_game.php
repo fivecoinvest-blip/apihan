@@ -9,6 +9,7 @@ if (!isset($_SESSION['user_id'])) {
 require_once 'config.php';
 require_once 'db_helper.php';
 require_once 'api_request_builder.php';
+require_once 'balance_helper.php';
 require_once 'currency_helper.php';
 
 $userModel = new User();
@@ -246,8 +247,8 @@ $result = sendLaunchGameRequest($params);
             }, 10000);
         }
         
-        // Keep session alive and update balance during gameplay
-        // Ping server every 10 seconds to prevent session timeout and get latest balance
+        // Keep session alive during gameplay
+        // Ping server every 5 minutes to prevent session timeout
         setInterval(function() {
             fetch('keep_alive.php')
                 .then(response => response.json())
@@ -257,27 +258,7 @@ $result = sendLaunchGameRequest($params);
                 .catch(error => {
                     console.error('Keep-alive failed:', error);
                 });
-            
-            // Also fetch updated balance every 10 seconds
-            fetch('get_balance.php')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        console.log('Balance updated:', data.formatted);
-                        // Update balance in parent window if available
-                        if (window.opener && !window.opener.closed) {
-                            window.opener.postMessage({
-                                type: 'balanceUpdate',
-                                balance: data.balance,
-                                formatted: data.formatted
-                            }, '*');
-                        }
-                    }
-                })
-                .catch(error => {
-                    console.error('Balance fetch failed:', error);
-                });
-        }, 10000); // 10 seconds = 10,000 milliseconds
+        }, 300000); // 5 minutes = 300,000 milliseconds
         
         const floatingBtn = document.getElementById('floatingBtn');
         let isDragging = false;

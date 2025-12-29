@@ -180,7 +180,7 @@ function processGameCallback(string $userId, float $betAmount, float $winAmount,
         ");
         $stmt->execute([$newBalance, $betAmount, $winAmount, $userId]);
         
-        // Invalidate Redis cache for user balance
+        // Invalidate Redis cache for this user's balance
         $cache = RedisCache::getInstance();
         $cache->delete("user:balance:{$userId}");
         $cache->delete("user:data:{$userId}");
