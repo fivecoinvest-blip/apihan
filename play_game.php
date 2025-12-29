@@ -248,17 +248,21 @@ $result = sendLaunchGameRequest($params);
         }
         
         // Keep session alive during gameplay
-        // Ping server every 5 minutes to prevent session timeout
+        // Ping server every 2 minutes to prevent session timeout and detect balance changes
         setInterval(function() {
             fetch('keep_alive.php')
                 .then(response => response.json())
                 .then(data => {
                     console.log('Session kept alive:', data);
+                    // Log balance if provided (useful for debugging admin updates)
+                    if (data.balance !== undefined) {
+                        console.log('Current balance:', data.balance);
+                    }
                 })
                 .catch(error => {
                     console.error('Keep-alive failed:', error);
                 });
-        }, 300000); // 5 minutes = 300,000 milliseconds
+        }, 120000); // 2 minutes = 120,000 milliseconds
         
         const floatingBtn = document.getElementById('floatingBtn');
         let isDragging = false;

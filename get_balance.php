@@ -2,6 +2,7 @@
 /**
  * Get User Balance - AJAX endpoint for real-time balance updates
  */
+require_once 'config.php';
 require_once 'session_config.php';
 require_once 'db_helper.php';
 

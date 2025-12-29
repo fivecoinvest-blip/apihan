@@ -165,34 +165,39 @@ class User {
     }
     
     public function getBalance($userId) {
-        // Try to get from cache first
+        // Try to get from cache first with freshness check (max 60 seconds old)
         $cacheKey = "user:balance:{$userId}";
-        $cachedBalance = $this->cache->get($cacheKey);
+        $cachedBalance = $this->cache->getWithFreshness($cacheKey, 60);
         
         if ($cachedBalance !== false) {
             return (float)$cachedBalance;
         }
         
-        // Cache miss - get from database
+        // Cache miss or stale - get from database
         $stmt = $this->db->prepare("SELECT balance FROM users WHERE id = ?");
         $stmt->execute([$userId]);
         $result = $stmt->fetch();
         $balance = $result ? (float)$result['balance'] : 0;
         
-        // Store in cache for 5 minutes
-        $this->cache->set($cacheKey, $balance, RedisCache::CACHE_5_MINUTES);
+        // Store in cache with timestamp for 1 minute (critical data)
+        $this->cache->setWithTimestamp($cacheKey, $balance, RedisCache::PRIORITY_CRITICAL);
         
         return $balance;
     }
     
     public function updateBalance($userId, $newBalance) {
+        // Update database first
         $stmt = $this->db->prepare("UPDATE users SET balance = ? WHERE id = ?");
         $result = $stmt->execute([$newBalance, $userId]);
         
-        // Invalidate cache on update
         if ($result) {
-            $this->cache->delete("user:balance:{$userId}");
+            // Write-through: immediately update cache with new value
+            $this->cache->refreshBalance($userId, $newBalance);
+            
+            // Also invalidate related caches
             $this->cache->delete("user:data:{$userId}");
+            
+            error_log("Balance updated for user {$userId}: {$newBalance} (cache refreshed)");
         }
         
         return $result;

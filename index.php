@@ -4,6 +4,12 @@ require_once 'config.php';
 require_once 'db_helper.php';
 require_once 'redis_helper.php';
 require_once 'currency_helper.php';
+require_once 'settings_helper.php';
+
+// Load site settings
+$casinoName = SiteSettings::get('casino_name', 'Casino PHP');
+$casinoTagline = SiteSettings::get('casino_tagline', 'Play & Win Big!');
+$themeColor = SiteSettings::get('theme_color', '#6366f1');
 
 $loggedIn = isset($_SESSION['user_id']);
 $balance = 0;
@@ -97,8 +103,8 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#1e293b">
-    <title>Casino - Game Lobby</title>
+    <meta name="theme-color" content="<?php echo htmlspecialchars($themeColor); ?>">
+    <title><?php echo htmlspecialchars($casinoName); ?> - Game Lobby</title>
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
     <style>
@@ -404,7 +410,7 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
 <body>
     <!-- Header -->
     <div class="header">
-        <div class="logo">🎰 Casino</div>
+        <div class="logo">🎰 <?php echo htmlspecialchars($casinoName); ?></div>
         <div class="user-info">
             <?php if ($loggedIn): ?>
                 <div class="balance" id="user-balance" data-currency="<?php echo $userCurrency; ?>">💰 <?php echo formatCurrency($balance, $userCurrency); ?></div>

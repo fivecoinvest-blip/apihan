@@ -14,6 +14,7 @@ Full-featured casino platform with user authentication, game lobby, wallet manag
   - Game Management (add, edit, upload images)
   - Betting History & Statistics
   - Revenue Tracking
+  - Dynamic Site Settings (Casino name, tagline, theme color)
 - ✅ Responsive Design (PC, Tablet, Mobile)
 - ✅ PWA Support (Install as App on Android/iOS)
 - ✅ Transaction History & Audit Logs
@@ -23,6 +24,9 @@ Full-featured casino platform with user authentication, game lobby, wallet manag
 - ✅ Extended Session Management (4-hour timeout with auto keep-alive)
 - ✅ Form Resubmission Prevention (Post/Redirect/Get pattern)
 - ✅ Smart Game Loading (Hides timeout errors if game loads successfully)
+- ✅ **Redis Caching System** (Write-through caching, 60-second balance TTL)
+- ✅ **Cache Warming** (Pre-populates cache on login for fast access)
+- ✅ **Auto Cache Invalidation** (Admin updates reflected immediately)
 
 ---
 
@@ -37,7 +41,10 @@ casino/
 ├── admin.php              # Admin dashboard (games, users, history)
 ├── get_user_history.php   # AJAX endpoint for user transaction history
 ├── session_config.php     # Extended session management (4-hour timeout)
-├── keep_alive.php         # Session keep-alive endpoint for long gameplay
+├── keep_alive.php         # Session keep-alive endpoint (2-min interval, includes balance check)
+├── get_balance.php        # AJAX endpoint for real-time balance updates
+├── redis_helper.php       # Redis caching with write-through pattern
+├── settings_helper.php    # Site settings with Redis caching
 ├── wallet.php             # Wallet management (to be created)
 ├── profile.php            # User profile (to be created)
 ├── db_helper.php          # Database functions
@@ -92,6 +99,42 @@ This creates:
 - `user_preferences` table - User settings
 - `games` table - 206+ JILI games with metadata
 - `admin_users` table - Admin authentication
+- `site_settings` table - Dynamic site configuration (casino name, theme, etc.)
+- `login_history` table - User login tracking with device info
+
+### 1.5. Redis Setup (Required)
+
+Install and configure Redis for caching:
+
+```bash
+# Install Redis
+sudo apt update
+sudo apt install redis-server
+
+# Start Redis
+sudo systemctl start redis-server
+sudo systemctl enable redis-server
+
+# Test Redis
+redis-cli ping
+# Should return: PONG
+
+# Configure Redis (optional - adjust memory)
+sudo nano /etc/redis/redis.conf
+# maxmemory 256mb
+# maxmemory-policy allkeys-lru
+
+# Restart Redis
+sudo systemctl restart redis-server
+```
+
+**Redis Features:**
+- Write-through caching (updates cache immediately with DB)
+- Short TTL for critical data (balance: 60 seconds)
+- Cache warming on user login
+- Automatic cache invalidation on admin updates
+- Settings cache (5 minutes TTL)
+- Game list cache (15 minutes TTL)
 
 ### 2. Update config.php
 
@@ -620,12 +663,15 @@ Safari: Share → Add to Home Screen
 ## 🎯 Production Checklist
 
 - [ ] Database configured with secure credentials
+- [ ] Redis installed and running (`redis-cli ping` returns PONG)
 - [ ] SoftAPI credentials updated in config.php
 - [ ] Domain whitelisted in SoftAPI dashboard
 - [ ] HTTPS enabled (SSL certificate installed)
 - [ ] File permissions set correctly (755 for PHP, 777 for logs)
 - [ ] Error reporting disabled in production
-- [ ] Session security configured
+- [ ] Session security configured (session_config.php)
+- [ ] Redis memory limits configured (256MB recommended)
+- [ ] Cache warming enabled (login.php)
 - [ ] Backup system in place
 - [ ] Monitoring/logging enabled
 - [ ] Terms & Conditions added
@@ -642,13 +688,52 @@ Safari: Share → Add to Home Screen
 - **Check Logs**: `logs/api_*.log`, `logs/transactions.log`
 - **Database Issues**: Run `setup_database.php` again
 - **Balance Issues**: Check `callback.php` logs
+- **Redis Issues**: `redis-cli PING`, check if service is running
+- **Cache Problems**: Clear cache with `redis-cli FLUSHDB`
+- **Settings Not Updating**: Check Redis cache invalidation in admin.php
+
+**Troubleshooting Commands:**
+```bash
+# Check Redis status
+sudo systemctl status redis-server
+
+# Monitor Redis operations
+redis-cli MONITOR
+
+# Check cached keys
+redis-cli KEYS '*'
+
+# Get cache statistics
+redis-cli INFO stats
+
+# Clear all cache
+redis-cli FLUSHDB
+
+# Test balance cache
+redis-cli GET 'user:balance:1'
+
+# Check settings cache
+redis-cli GET 'site:settings:all'
+```
 
 ---
 
 **Last Updated**: December 29, 2025
-**Version**: 1.4.0
+**Version**: 1.5.0
 
-**Recent Changes (v1.4.0):**
+**Recent Changes (v1.5.0):**
+- **Redis Caching System** - Write-through caching with automatic invalidation
+- **Balance Cache Optimization** - 60-second TTL (was 5 minutes) for real-time accuracy
+- **Cache Warming** - Pre-populates cache on login (balance, user data, currency)
+- **Admin Balance Updates Fixed** - Cache invalidated immediately, reflected in frontend
+- **Settings Cache System** - Dynamic casino name, tagline, theme with Redis caching
+- **Keep-Alive Enhancement** - Reduced to 2-minute interval, includes balance check
+- **Write-Through Pattern** - Updates both database and cache simultaneously
+- **Freshness Checks** - Automatic rejection of stale cached data
+- **Cache Priorities** - Different TTL for critical vs. non-critical data
+- **Session Management** - Improved session persistence during gameplay
+
+**Previous Changes (v1.4.0):**
 - **Extended Session Management** - 4-hour timeout with automatic keep-alive
 - **Session Keep-Alive System** - Automatic ping every 5 minutes during gameplay
 - **Form Resubmission Prevention** - Post/Redirect/Get pattern on all forms

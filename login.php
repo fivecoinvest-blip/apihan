@@ -2,6 +2,11 @@
 require_once 'session_config.php';
 require_once 'config.php';
 require_once 'db_helper.php';
+require_once 'settings_helper.php';
+
+// Load site settings
+$casinoName = SiteSettings::get('casino_name', 'Casino PHP');
+$casinoTagline = SiteSettings::get('casino_tagline', 'Play & Win Big!');
 
 $user = new User();
 
@@ -79,6 +84,11 @@ if (isset($_POST['login'])) {
         // Store session ID for logout tracking
         $_SESSION['login_history_id'] = $pdo->lastInsertId();
         
+        // Warm up Redis cache with user data for fast access
+        require_once 'redis_helper.php';
+        $cache = RedisCache::getInstance();
+        $cache->warmUserCache($loggedUser['id'], $loggedUser);
+        
         header('Location: index.php');
         exit;
     } else {
@@ -125,7 +135,7 @@ if (isset($_POST['register'])) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#6366f1">
-    <title>Casino - Login</title>
+    <title><?php echo htmlspecialchars($casinoName); ?> - Login</title>
     <link rel="manifest" href="manifest.json">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -418,8 +428,8 @@ if (isset($_POST['register'])) {
         <a href="index.php" class="back-link">← Back to Games</a>
         <div class="logo">
             <a href="index.php">
-                <h1>🎰 Casino</h1>
-                <p>Play & Win Big</p>
+                <h1>🎰 <?php echo htmlspecialchars($casinoName); ?></h1>
+                <p><?php echo htmlspecialchars($casinoTagline); ?></p>
             </a>
         </div>
         

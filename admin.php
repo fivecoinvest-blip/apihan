@@ -424,8 +424,20 @@ if (isset($_POST['add_game'])) {
 
 // Handle user balance update
 if (isset($_POST['update_user_balance'])) {
+    $userId = $_POST['user_id'];
+    $newBalance = $_POST['new_balance'];
+    $currency = $_POST['currency'];
+    
     $stmt = $pdo->prepare("UPDATE users SET balance = ?, currency = ? WHERE id = ?");
-    $stmt->execute([$_POST['new_balance'], $_POST['currency'], $_POST['user_id']]);
+    $stmt->execute([$newBalance, $currency, $userId]);
+    
+    // Write-through caching: immediately update cache with new balance
+    $cache = RedisCache::getInstance();
+    $cache->refreshBalance($userId, $newBalance);
+    
+    // Invalidate related caches
+    $cache->delete("user:data:{$userId}");
+    
     $_SESSION['success'] = "User balance updated successfully!";
     header("Location: admin.php");
     exit;
@@ -450,6 +462,14 @@ if (isset($_POST['update_user_info'])) {
         WHERE id = ?
     ");
     $stmt->execute([$username, $phone, $balance, $currency, $status, $userId]);
+    
+    // Write-through caching: immediately update cache with new balance
+    $cache = RedisCache::getInstance();
+    $cache->refreshBalance($userId, $balance);
+    
+    // Invalidate all user caches to refresh with new data
+    $cache->invalidateUserCache($userId);
+    
     $_SESSION['success'] = "User information updated successfully!";
     header("Location: admin.php");
     exit;
