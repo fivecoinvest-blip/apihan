@@ -28,8 +28,8 @@ Full-featured casino platform with user authentication, game lobby, wallet manag
 ```
 casino/
 ├── login.php              # Login/Register page with currency detection
-├── casino.php             # Game lobby (loads games from database)
-├── play_game.php          # Game player page
+├── index.php              # Main game lobby (loads games from database)
+├── play_game.php          # Game player page with draggable home button
 ├── logout.php             # Logout handler
 ├── admin.php              # Admin dashboard (games, users, history)
 ├── get_user_history.php   # AJAX endpoint for user transaction history
@@ -91,46 +91,66 @@ define('DB_USER', 'casino_user');  // Use dedicated user, not root
 define('DB_PASS', 'your_secure_password');
 
 // SoftAPI Credentials
-define('API_TOKEN', 'your_api_token');
-define('API_SECRET', 'your_32_character_secret');  // Must be exactly 32 bytes
+define('API_TOKEN', '5cd0be9827c469e7ce7d07abbb239e98');
+define('API_SECRET', 'dc6b955933342d32d49b84c52b59184f');  // Must be exactly 32 bytes
 define('SERVER_URL', 'https://igamingapis.live/api/v1');
-define('RETURN_URL', 'https://yourdomain.com/casino.php');
-define('CALLBACK_URL', 'https://yourdomain.com/callback.php');
+define('RETURN_URL', 'https://31.97.107.21/');  // HTTPS for user-facing
+define('CALLBACK_URL', 'http://31.97.107.21/callback.php');  // HTTP for API callbacks
 ```
 
-### 3. Deploy to Server
+### 3. Setup SSL Certificate
+
+```bash
+# Generate self-signed SSL certificate
+ssh root@31.97.107.21 "openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/apache-selfsigned.key \
+  -out /etc/ssl/certs/apache-selfsigned.crt \
+  -subj '/C=PH/ST=Manila/L=Manila/O=Casino/OU=IT/CN=31.97.107.21'"
+
+# Enable SSL module and site
+ssh root@31.97.107.21 "a2enmod ssl && a2ensite default-ssl && systemctl reload apache2"
+```
+
+**Note:** Self-signed certificate will show browser warning. For production, use Let's Encrypt or commercial SSL.
+
+### 4. Deploy to Server
 
 ```bash
 # Upload all files to your server
-scp -r ./* user@yourserver.com:/var/www/html/casino/
+scp -r ./* root@31.97.107.21:/var/www/html/
 
 # Set permissions
-ssh user@yourserver.com "chmod 755 /var/www/html/casino/*.php"
-ssh user@yourserver.com "chmod 777 /var/www/html/casino/logs"
+ssh root@31.97.107.21 "chmod 755 /var/www/html/*.php"
+ssh root@31.97.107.21 "chmod 777 /var/www/html/logs"
+ssh root@31.97.107.21 "chown -R www-data:www-data /var/www/html"
 ```
 
 ### 4. Configure SoftAPI Dashboard
 
-1. Go to SoftAPI Settings → API Keys
-2. Set Domain: `https://yourdomain.com/casino.php`
-3. Set Callback URL: `https://yourdomain.com/callback.php`
-4. Whitelist your server IP
+1. Go to SoftAPI Settings → API Configuration
+2. Set Domain: `https://31.97.107.21/`
+3. Set Callback URL: `http://31.97.107.21/callback.php` (HTTP for API access)
+4. Server IP is whitelisted: 31.97.107.21
 5. Save settings
+
+**Note:** Use HTTP for callback URL to avoid SSL certificate issues with API callbacks.
 
 ---
 
 ## 📱 Platform Support
 
 ### PC/Web Browser
-- Access: `https://yourdomain.com/login.php`
-- Fully responsive desktop interface
+- Access: `https://31.97.107.21/login.php` or `https://31.97.107.21/`
+- Fully responsive desktop interface with hover effects
 - Supports all modern browsers (Chrome, Firefox, Safari, Edge)
+- SSL certificate requires accepting security warning (self-signed)
 
 ### Mobile Web
-- Access: `https://yourdomain.com/login.php`
+- Access: `https://31.97.107.21/login.php`
 - Mobile-optimized responsive design
-- Touch-friendly interface
-- Bottom navigation bar for easy access
+- Touch-friendly interface with hover play buttons
+- Draggable floating home button in games
+- Full-screen game experience without navigation bars
 
 ### PWA (Progressive Web App)
 - Install on **Android**: Open in Chrome → Menu → "Install App"
@@ -189,22 +209,26 @@ System normalizes phone format (+639...) and validates
 ↓
 Create session with user_id, username, phone, currency
 ↓
-Redirect to casino.php (Game Lobby)
+Redirect to index.php (Main Game Lobby)
 ```
 
 ### 3. Play Game
 ```
-Browse 58 JILI games in lobby → Click "Play Now"
+Browse games in lobby → Hover over game card → Click "▶ Play"
 ↓
 System checks balance → Launch game via SoftAPI
 ↓
-Game loads in iframe → Player places bets
+Game loads in full-screen responsive iframe
 ↓
-Callback receives encrypted results → Balance updated in database
+Draggable floating home button appears in top-right
 ↓
-Transaction logged with bet/win amounts
+Player places bets → Callback receives encrypted results
+↓
+Balance updated in database → Transaction logged
 ↓
 User sees updated balance in real-time
+↓
+Click/tap floating button to return home (without moving = click)
 ```
 
 ### 4. Balance Management
@@ -226,7 +250,7 @@ Real-time balance display in header with currency symbol
 
 ### Access Admin Dashboard
 
-**URL:** `https://yourdomain.com/admin.php`
+**URL:** `https://31.97.107.21/admin.php`
 
 **Default Credentials:**
 - Username: `admin`
@@ -482,7 +506,29 @@ total_bets, total_wins, rounds_played, started_at, ended_at, status
 
 ---
 
-## 📈 Next Steps
+## � Backup System
+
+### GitHub Repository
+
+Backup repository: https://github.com/fivecoinvest-blip/apihan
+
+### Automated Backup Script
+
+```bash
+# Run backup script (syncs server to local, commits to GitHub)
+./backup_server.sh
+```
+
+**What it does:**
+1. Syncs all files from server to local PC using rsync
+2. Commits changes to Git with timestamp
+3. Pushes to GitHub repository
+
+**Script location:** `/home/neng/Desktop/apihan/backup_server.sh`
+
+---
+
+## �📈 Next Steps
 
 1. **Add Wallet Page**: Deposits, withdrawals, transaction history
 2. **Add Profile Page**: Edit user info, change password
@@ -545,5 +591,14 @@ Safari: Share → Add to Home Screen
 
 ---
 
-**Last Updated**: December 28, 2025
-**Version**: 1.0.0
+**Last Updated**: December 29, 2025
+**Version**: 1.1.0
+
+**Recent Changes:**
+- Moved casino.php to index.php as main page
+- Removed /apihan/ subdirectory
+- Added SSL certificate (self-signed)
+- Implemented draggable floating home button
+- Enhanced mobile responsiveness
+- Fixed balance tracking and callbacks
+- Added GitHub backup system
