@@ -1,5 +1,5 @@
 <?php
-session_start();
+require_once 'session_config.php';
 
 if (!isset($_SESSION['user_id'])) {
     header('Location: login.php');
@@ -136,6 +136,45 @@ $result = sendLaunchGameRequest($params);
             text-align: center;
         }
         
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.95);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 20px;
+            z-index: 9999;
+            transition: opacity 0.3s ease;
+        }
+        
+        .loading-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(59, 130, 246, 0.3);
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .loading-text {
+            color: #94a3b8;
+            font-size: 16px;
+        }
+        
         @media (max-width: 768px) {
             .floating-home {
                 width: 45px;
@@ -150,24 +189,34 @@ $result = sendLaunchGameRequest($params);
 <body>
     
     <?php if ($result['success']): ?>
+        <!-- Loading overlay - shown until game loads -->
+        <div class="loading-overlay" id="loadingOverlay">
+            <div class="spinner"></div>
+            <div class="loading-text">Loading game...</div>
+        </div>
+        
         <div class="game-container">
             <iframe src="<?php echo htmlspecialchars($result['game_url']); ?>" 
                     class="game-frame" 
+                    id="gameFrame"
                     allowfullscreen></iframe>
         </div>
         <button class="floating-home" id="floatingBtn" title="Drag to move">🏠</button>
     <?php else: ?>
-        <div class="error-container">
+        <div class="error-container" id="errorContainer">
             <div class="error-message">
                 <h3>⚠️ Failed to load game</h3>
                 <p><?php echo htmlspecialchars($result['error']); ?></p>
                 <?php if (strpos($result['error'], 'timeout') !== false || strpos($result['error'], 'deadline exceeded') !== false): ?>
                     <p style="margin-top: 15px; font-size: 14px; opacity: 0.9;">
-                        <strong>Tip:</strong> The game server is responding slowly. Please try again in a moment or contact support if the problem persists.
+                        <strong>Tip:</strong> The game server is responding slowly. This error may disappear if the game loads successfully.
+                    </p>
+                    <p style="margin-top: 10px; font-size: 13px; opacity: 0.8;">
+                        Waiting for game to load...
                     </p>
                 <?php endif; ?>
                 <button onclick="location.href='index.php'" style="margin-top: 20px; padding: 12px 24px; background: #3b82f6; border: none; border-radius: 8px; color: white; font-weight: 600; cursor: pointer;">
-                    🔄 Try Again
+                    ← Back to Lobby
                 </button>
             </div>
             <button class="floating-home" id="floatingBtn" title="Drag to move">🏠</button>
@@ -175,6 +224,42 @@ $result = sendLaunchGameRequest($params);
     <?php endif; ?>
     
     <script>
+        // Hide loading overlay when game iframe loads
+        const gameFrame = document.getElementById('gameFrame');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        
+        if (gameFrame && loadingOverlay) {
+            gameFrame.addEventListener('load', function() {
+                loadingOverlay.classList.add('hidden');
+                setTimeout(() => {
+                    loadingOverlay.style.display = 'none';
+                }, 300);
+            });
+            
+            // Fallback: hide loading after 10 seconds even if load event doesn't fire
+            setTimeout(() => {
+                if (loadingOverlay && !loadingOverlay.classList.contains('hidden')) {
+                    loadingOverlay.classList.add('hidden');
+                    setTimeout(() => {
+                        loadingOverlay.style.display = 'none';
+                    }, 300);
+                }
+            }, 10000);
+        }
+        
+        // Keep session alive during gameplay
+        // Ping server every 5 minutes to prevent session timeout
+        setInterval(function() {
+            fetch('keep_alive.php')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Session kept alive:', data);
+                })
+                .catch(error => {
+                    console.error('Keep-alive failed:', error);
+                });
+        }, 300000); // 5 minutes = 300,000 milliseconds
+        
         const floatingBtn = document.getElementById('floatingBtn');
         let isDragging = false;
         let startX, startY, startLeft, startTop;

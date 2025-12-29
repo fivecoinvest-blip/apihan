@@ -2,11 +2,33 @@
 /**
  * Admin Panel - Game Management
  */
-session_start();
+require_once 'session_config.php';
 require_once 'config.php';
 require_once 'db_helper.php';
 require_once 'currency_helper.php';
 require_once 'settings_helper.php';
+
+// Handle success/error messages from session
+$success = isset($_SESSION['success']) ? $_SESSION['success'] : null;
+$error = isset($_SESSION['error']) ? $_SESSION['error'] : null;
+unset($_SESSION['success'], $_SESSION['error']);
+
+// Also check for GET parameters (for backward compatibility)
+if (isset($_GET['success'])) {
+    $success = match($_GET['success']) {
+        'game_added' => 'Game added successfully!',
+        'game_updated' => 'Game updated successfully!',
+        'game_deleted' => 'Game deleted successfully!',
+        'image_uploaded' => 'Image uploaded successfully!',
+        'user_updated' => 'User information updated successfully!',
+        'balance_updated' => 'User balance updated successfully!',
+        'settings_updated' => 'Settings updated successfully!',
+        default => 'Operation completed successfully!'
+    };
+}
+if (isset($_GET['error'])) {
+    $error = urldecode($_GET['error']);
+}
 
 // Get database connection
 $db = Database::getInstance();
@@ -29,8 +51,14 @@ if (isset($_POST['admin_login'])) {
         
         // Update last login
         $pdo->prepare("UPDATE admin_users SET last_login = NOW() WHERE id = ?")->execute([$admin['id']]);
+        
+        // Redirect to prevent resubmission
+        header("Location: admin.php");
+        exit;
     } else {
-        $error = "Invalid username or password";
+        $_SESSION['error'] = "Invalid username or password";
+        header("Location: admin.php");
+        exit;
     }
 }
 
@@ -89,9 +117,15 @@ if (isset($_POST['upload_image']) && isset($_FILES['game_image'])) {
         if (move_uploaded_file($file['tmp_name'], $uploadPath)) {
             $stmt = $pdo->prepare("UPDATE games SET image = ? WHERE id = ?");
             $stmt->execute([$uploadPath, $gameId]);
-            $success = "Image uploaded successfully!";
+            $_SESSION['success'] = "Image uploaded successfully!";
+        } else {
+            $_SESSION['error'] = "Failed to upload image.";
         }
+    } else {
+        $_SESSION['error'] = "Image upload error.";
     }
+    header("Location: admin.php");
+    exit;
 }
 
 // Handle game update
@@ -105,14 +139,18 @@ if (isset($_POST['update_game'])) {
         $_POST['sort_order'],
         $_POST['game_id']
     ]);
-    $success = "Game updated successfully!";
+    $_SESSION['success'] = "Game updated successfully!";
+    header("Location: admin.php");
+    exit;
 }
 
 // Handle game delete
 if (isset($_GET['delete'])) {
     $stmt = $pdo->prepare("DELETE FROM games WHERE id = ?");
     $stmt->execute([$_GET['delete']]);
-    $success = "Game deleted successfully!";
+    $_SESSION['success'] = "Game deleted successfully!";
+    header("Location: admin.php");
+    exit;
 }
 
 // Handle add new game
@@ -123,7 +161,7 @@ if (isset($_POST['add_game'])) {
         $checkStmt->execute([$_POST['game_uid']]);
         
         if ($checkStmt->fetchColumn() > 0) {
-            $error = "Game UID already exists! Please use a different Game UID.";
+            $_SESSION['error'] = "Game UID already exists! Please use a different Game UID.";
         } else {
             $stmt = $pdo->prepare("INSERT INTO games (game_uid, name, provider, category, is_active, sort_order) VALUES (?, ?, ?, ?, ?, ?)");
             $stmt->execute([
@@ -134,20 +172,22 @@ if (isset($_POST['add_game'])) {
                 isset($_POST['is_active']) ? 1 : 0,
                 $_POST['sort_order']
             ]);
-            $success = "Game added successfully!";
-            header("Location: admin.php?success=game_added");
-            exit;
+            $_SESSION['success'] = "Game added successfully!";
         }
     } catch (PDOException $e) {
-        $error = "Error adding game: " . $e->getMessage();
+        $_SESSION['error'] = "Error adding game: " . $e->getMessage();
     }
+    header("Location: admin.php");
+    exit;
 }
 
 // Handle user balance update
 if (isset($_POST['update_user_balance'])) {
     $stmt = $pdo->prepare("UPDATE users SET balance = ?, currency = ? WHERE id = ?");
     $stmt->execute([$_POST['new_balance'], $_POST['currency'], $_POST['user_id']]);
-    $success = "User balance updated successfully!";
+    $_SESSION['success'] = "User balance updated successfully!";
+    header("Location: admin.php");
+    exit;
 }
 
 // Handle user information update
@@ -169,7 +209,9 @@ if (isset($_POST['update_user_info'])) {
         WHERE id = ?
     ");
     $stmt->execute([$username, $phone, $balance, $currency, $status, $userId]);
-    $success = "User information updated successfully!";
+    $_SESSION['success'] = "User information updated successfully!";
+    header("Location: admin.php");
+    exit;
 }
 
 // Handle settings update
@@ -202,7 +244,9 @@ if (isset($_POST['update_settings'])) {
         }
     }
     
-    $success = "Settings updated successfully!";
+    $_SESSION['success'] = "Settings updated successfully!";
+    header("Location: admin.php");
+    exit;
 }
 
 // Load site settings

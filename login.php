@@ -1,11 +1,14 @@
 <?php
-session_start();
+require_once 'session_config.php';
 require_once 'config.php';
 require_once 'db_helper.php';
 
 $user = new User();
-$error = '';
-$success = '';
+
+// Handle success/error messages from session
+$error = isset($_SESSION['error']) ? $_SESSION['error'] : '';
+$success = isset($_SESSION['success']) ? $_SESSION['success'] : '';
+unset($_SESSION['error'], $_SESSION['success']);
 
 // Handle Login
 if (isset($_POST['login'])) {
@@ -79,7 +82,9 @@ if (isset($_POST['login'])) {
         header('Location: index.php');
         exit;
     } else {
-        $error = 'Invalid phone number/username or password';
+        $_SESSION['error'] = 'Invalid phone number/username or password';
+        header('Location: login.php');
+        exit;
     }
 }
 
@@ -90,21 +95,23 @@ if (isset($_POST['register'])) {
     $confirmPassword = $_POST['reg_confirm_password'];
     
     if ($password !== $confirmPassword) {
-        $error = 'Passwords do not match';
+        $_SESSION['error'] = 'Passwords do not match';
     } elseif (strlen($password) < 6) {
-        $error = 'Password must be at least 6 characters';
+        $_SESSION['error'] = 'Password must be at least 6 characters';
     } elseif (strlen($phone) < 10) {
-        $error = 'Invalid phone number';
+        $_SESSION['error'] = 'Invalid phone number';
     } else {
         // Default to PHP currency for Philippine users
         $result = $user->register($phone, $password, '+639', 'PHP');
         
         if ($result) {
-            $success = "Registration successful! Your username: <strong>{$result['username']}</strong>. Please login.";
+            $_SESSION['success'] = "Registration successful! Your username: <strong>{$result['username']}</strong>. Please login.";
         } else {
-            $error = 'Phone number already registered';
+            $_SESSION['error'] = 'Phone number already registered';
         }
     }
+    header('Location: login.php');
+    exit;
 }
 
 /**

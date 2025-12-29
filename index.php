@@ -1,5 +1,5 @@
 <?php
-session_start();
+require_once 'session_config.php';
 require_once 'config.php';
 require_once 'db_helper.php';
 require_once 'currency_helper.php';

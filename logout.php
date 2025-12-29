@@ -1,5 +1,5 @@
 <?php
-session_start();
+require_once 'session_config.php';
 
 // Track logout time and session duration
 if (isset($_SESSION['login_history_id'])) {
