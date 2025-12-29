@@ -137,7 +137,7 @@ if (isset($_POST['register'])) {
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 20px;
+            padding: 15px;
         }
         
         .container {
@@ -146,14 +146,16 @@ if (isset($_POST['register'])) {
             border-radius: 20px;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
             width: 100%;
-            max-width: 420px;
+            max-width: 440px;
             padding: 40px;
+            position: relative;
         }
         
         .logo {
             text-align: center;
             margin-bottom: 30px;
             position: relative;
+            padding-top: 10px;
         }
         
         .logo a {
@@ -180,7 +182,7 @@ if (isset($_POST['register'])) {
         
         .back-link {
             position: absolute;
-            top: -10px;
+            top: 0;
             left: 0;
             color: #667eea;
             text-decoration: none;
@@ -201,24 +203,25 @@ if (isset($_POST['register'])) {
         
         .tabs {
             display: flex;
-            gap: 10px;
-            margin-bottom: 30px;
+            gap: 8px;
+            margin-bottom: 25px;
             background: #f5f5f5;
-            border-radius: 10px;
+            border-radius: 12px;
             padding: 5px;
         }
         
         .tab {
             flex: 1;
-            padding: 12px;
+            padding: 12px 10px;
             text-align: center;
             border: none;
             background: transparent;
-            border-radius: 8px;
+            border-radius: 10px;
             cursor: pointer;
             font-weight: 600;
             color: #666;
             transition: all 0.3s;
+            font-size: 15px;
         }
         
         .tab.active {
@@ -236,34 +239,36 @@ if (isset($_POST['register'])) {
         }
         
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 18px;
         }
         
         label {
             display: block;
             margin-bottom: 8px;
             color: #333;
-            font-weight: 500;
+            font-weight: 600;
             font-size: 14px;
         }
         
         input {
             width: 100%;
-            padding: 14px;
+            padding: 14px 16px;
             border: 2px solid #e5e7eb;
             border-radius: 10px;
             font-size: 15px;
             transition: all 0.3s;
+            background: white;
         }
         
         input:focus {
             outline: none;
             border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
         
         .btn {
             width: 100%;
-            padding: 14px;
+            padding: 15px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
@@ -271,11 +276,13 @@ if (isset($_POST['register'])) {
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
-            transition: transform 0.2s;
+            transition: all 0.3s;
+            margin-top: 8px;
         }
         
         .btn:hover {
             transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
         }
         
         .btn:active {
@@ -283,25 +290,134 @@ if (isset($_POST['register'])) {
         }
         
         .alert {
-            padding: 12px;
+            padding: 12px 16px;
             border-radius: 10px;
             margin-bottom: 20px;
             font-size: 14px;
+            line-height: 1.5;
         }
         
         .alert-error {
             background: #fee2e2;
             color: #dc2626;
+            border-left: 4px solid #dc2626;
         }
         
         .alert-success {
             background: #d1fae5;
             color: #059669;
+            border-left: 4px solid #059669;
+        }
+        
+        small {
+            display: block;
+            color: #888;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+            
+            .container {
+                padding: 30px 25px;
+                border-radius: 16px;
+            }
+            
+            .logo h1 {
+                font-size: 32px;
+            }
+            
+            .back-link {
+                font-size: 13px;
+                padding: 6px 10px;
+            }
         }
         
         @media (max-width: 480px) {
+            body {
+                padding: 8px;
+                align-items: flex-start;
+                padding-top: 20px;
+            }
+            
             .container {
-                padding: 30px 20px;
+                padding: 25px 20px;
+                border-radius: 16px;
+                max-width: 100%;
+            }
+            
+            .logo {
+                margin-bottom: 25px;
+            }
+            
+            .logo h1 {
+                font-size: 28px;
+            }
+            
+            .logo p {
+                font-size: 13px;
+            }
+            
+            .back-link {
+                position: relative;
+                display: inline-flex;
+                margin-bottom: 15px;
+                font-size: 13px;
+            }
+            
+            .tabs {
+                gap: 6px;
+                padding: 4px;
+            }
+            
+            .tab {
+                padding: 10px 8px;
+                font-size: 14px;
+            }
+            
+            .form-group {
+                margin-bottom: 16px;
+            }
+            
+            label {
+                font-size: 13px;
+            }
+            
+            input {
+                padding: 12px 14px;
+                font-size: 16px; /* Prevents iOS zoom */
+            }
+            
+            .btn {
+                padding: 14px;
+                font-size: 15px;
+            }
+            
+            .alert {
+                padding: 10px 14px;
+                font-size: 13px;
+            }
+            
+            small {
+                font-size: 11px;
+            }
+        }
+        
+        @media (max-width: 360px) {
+            .container {
+                padding: 20px 16px;
+            }
+            
+            .logo h1 {
+                font-size: 24px;
+            }
+            
+            input, .btn {
+                font-size: 15px;
             }
         }
     </style>

@@ -66,27 +66,249 @@ if (isset($_POST['admin_login'])) {
 if (!isset($_SESSION['admin_logged_in'])) {
     ?>
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Admin Login</title>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-            .login-box { background: white; padding: 40px; border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); width: 90%; max-width: 400px; }
-            h1 { text-align: center; color: #667eea; margin-bottom: 30px; }
-            input { width: 100%; padding: 15px; border: 2px solid #ddd; border-radius: 10px; font-size: 16px; margin-bottom: 20px; }
-            button { width: 100%; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; }
-            .error { color: red; text-align: center; margin-bottom: 15px; }
+            
+            body { 
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                min-height: 100vh; 
+                display: flex; 
+                align-items: center; 
+                justify-content: center;
+                padding: 15px;
+            }
+            
+            .login-box { 
+                background: rgba(255, 255, 255, 0.95);
+                backdrop-filter: blur(10px);
+                padding: 40px; 
+                border-radius: 20px; 
+                box-shadow: 0 20px 60px rgba(0,0,0,0.3); 
+                width: 100%; 
+                max-width: 440px;
+            }
+            
+            .logo {
+                text-align: center;
+                margin-bottom: 30px;
+            }
+            
+            .logo a {
+                text-decoration: none;
+                color: inherit;
+                display: inline-block;
+                transition: transform 0.3s;
+            }
+            
+            .logo a:hover {
+                transform: scale(1.05);
+            }
+            
+            h1 { 
+                text-align: center; 
+                color: #667eea; 
+                margin-bottom: 10px;
+                font-size: 32px;
+            }
+            
+            .subtitle {
+                text-align: center;
+                color: #666;
+                font-size: 14px;
+                margin-bottom: 30px;
+            }
+            
+            .form-group {
+                margin-bottom: 20px;
+            }
+            
+            label {
+                display: block;
+                margin-bottom: 8px;
+                color: #333;
+                font-weight: 600;
+                font-size: 14px;
+            }
+            
+            input { 
+                width: 100%; 
+                padding: 14px 16px; 
+                border: 2px solid #e5e7eb; 
+                border-radius: 10px; 
+                font-size: 15px;
+                transition: all 0.3s;
+                background: white;
+            }
+            
+            input:focus {
+                outline: none;
+                border-color: #667eea;
+                box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            }
+            
+            button { 
+                width: 100%; 
+                padding: 15px; 
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                color: white; 
+                border: none; 
+                border-radius: 10px; 
+                font-size: 16px; 
+                font-weight: 600; 
+                cursor: pointer;
+                transition: all 0.3s;
+                margin-top: 8px;
+            }
+            
+            button:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+            }
+            
+            button:active {
+                transform: translateY(0);
+            }
+            
+            .error { 
+                color: #dc2626;
+                background: #fee2e2;
+                border-left: 4px solid #dc2626;
+                padding: 12px 16px;
+                border-radius: 10px;
+                text-align: center; 
+                margin-bottom: 20px;
+                font-size: 14px;
+                line-height: 1.5;
+            }
+            
+            .back-link {
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                color: #667eea;
+                text-decoration: none;
+                font-size: 14px;
+                font-weight: 600;
+                margin-bottom: 20px;
+                padding: 8px 12px;
+                border-radius: 8px;
+                transition: all 0.3s;
+            }
+            
+            .back-link:hover {
+                background: rgba(102, 126, 234, 0.1);
+                transform: translateX(-3px);
+            }
+            
+            /* Responsive Design */
+            @media (max-width: 768px) {
+                body {
+                    padding: 10px;
+                }
+                
+                .login-box {
+                    padding: 30px 25px;
+                    border-radius: 16px;
+                }
+                
+                h1 {
+                    font-size: 28px;
+                }
+            }
+            
+            @media (max-width: 480px) {
+                body {
+                    padding: 8px;
+                    align-items: flex-start;
+                    padding-top: 20px;
+                }
+                
+                .login-box {
+                    padding: 25px 20px;
+                    border-radius: 16px;
+                    max-width: 100%;
+                }
+                
+                h1 {
+                    font-size: 24px;
+                    margin-bottom: 8px;
+                }
+                
+                .subtitle {
+                    font-size: 13px;
+                    margin-bottom: 25px;
+                }
+                
+                .back-link {
+                    font-size: 13px;
+                    padding: 6px 10px;
+                }
+                
+                .form-group {
+                    margin-bottom: 16px;
+                }
+                
+                label {
+                    font-size: 13px;
+                }
+                
+                input {
+                    padding: 12px 14px;
+                    font-size: 16px; /* Prevents iOS zoom */
+                }
+                
+                button {
+                    padding: 14px;
+                    font-size: 15px;
+                }
+                
+                .error {
+                    padding: 10px 14px;
+                    font-size: 13px;
+                }
+            }
+            
+            @media (max-width: 360px) {
+                .login-box {
+                    padding: 20px 16px;
+                }
+                
+                h1 {
+                    font-size: 22px;
+                }
+                
+                input, button {
+                    font-size: 15px;
+                }
+            }
         </style>
     </head>
     <body>
         <div class="login-box">
-            <h1>🔐 Admin Login</h1>
+            <a href="index.php" class="back-link">← Back to Games</a>
+            <div class="logo">
+                <a href="index.php">
+                    <h1>🔐 Admin Login</h1>
+                    <p class="subtitle">Secure Admin Access</p>
+                </a>
+            </div>
             <?php if (isset($error)) echo "<p class='error'>$error</p>"; ?>
             <form method="POST">
-                <input type="text" name="username" placeholder="Username" required autofocus>
-                <input type="password" name="password" placeholder="Password" required>
-                <button type="submit" name="admin_login">Login</button>
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" name="username" placeholder="Enter admin username" required autofocus>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" name="password" placeholder="Enter password" required>
+                </div>
+                <button type="submit" name="admin_login">Login to Admin Panel</button>
             </form>
         </div>
     </body>
