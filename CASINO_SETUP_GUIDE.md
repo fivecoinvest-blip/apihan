@@ -39,7 +39,9 @@ casino/
 ├── currency_helper.php    # Currency formatting and detection
 ├── setup_database.php     # Database setup script
 ├── setup_games_table.php  # Initial game database setup
-├── update_jili_games.php  # Update JILI games (206 games)
+├── update_jili_complete.php # Update JILI games + link images (206 games) [RECOMMENDED]
+├── update_jili_games.php  # Update JILI games only (legacy)
+├── update_game_images.php # Link game images only (legacy)
 ├── setup_admin.php        # Admin account creation
 ├── migrate_currency.php   # Currency migration script
 ├── config.php             # API configuration
@@ -64,8 +66,12 @@ Run the database setup scripts in order:
 # Create main database and user tables
 php setup_database.php
 
-# Add JILI games to database (206 games)
-php update_jili_games.php
+# Add JILI games + link images (206 games) - RECOMMENDED
+php update_jili_complete.php
+
+# OR use legacy separate scripts:
+# php update_jili_games.php     # Games only
+# php update_game_images.php    # Images only
 
 # Create admin account (username: admin, password: admin123)
 php setup_admin.php
@@ -309,16 +315,24 @@ php setup_admin.php
 
 ### Update JILI Games Database
 
-To update all JILI games from the latest list:
+To update all JILI games and link images in one step (RECOMMENDED):
 
 ```bash
-php update_jili_games.php
+php update_jili_complete.php
 ```
 
-This script will:
-- Add new games from JILI catalog
+This consolidated script will:
+- Add new games from JILI catalog (206 games)
 - Update existing games with correct names/categories
-- Show detailed import summary
+- Automatically link game images from images/games/ folder
+- Show detailed import and image linking summary
+- Handle both operations in a single execution
+
+**Legacy separate scripts (if needed):**
+```bash
+php update_jili_games.php    # Update games only
+php update_game_images.php   # Link images only
+```
 
 ### Add More Games via Admin Panel
 
@@ -542,7 +556,7 @@ Backup repository: https://github.com/fivecoinvest-blip/apihan
 
 ---
 
-## �📈 Next Steps
+## 📈 Next Steps
 
 1. **Add Wallet Page**: Deposits, withdrawals, transaction history
 2. **Add Profile Page**: Edit user info, change password
@@ -550,8 +564,10 @@ Backup repository: https://github.com/fivecoinvest-blip/apihan
 4. **Add Promotions**: Bonuses, free spins, cashback
 5. **Add Live Chat**: Customer support integration
 6. **Add Payment Gateway**: Stripe, PayPal integration
-7. **Add Admin Panel**: Manage users, games, transactions
+7. ~~**Add Admin Panel**: Manage users, games, transactions~~ ✅ **COMPLETED**
 8. **Add Analytics**: Track gameplay, popular games, revenue
+9. **Optimize Image Loading**: Implement lazy loading for game thumbnails
+10. **Add Search/Filter**: Search games by name, filter by category
 
 ---
 
@@ -606,9 +622,11 @@ Safari: Share → Add to Home Screen
 ---
 
 **Last Updated**: December 29, 2025
-**Version**: 1.2.0
+**Version**: 1.3.0
 
 **Recent Changes:**
+- **Created consolidated update script** (update_jili_complete.php) - handles games + images in one command
+- **Automated image management** - 206/206 game images matched and linked
 - **Updated JILI games catalog to 206+ games** (143 new, 63 updated)
 - Added user tracking system (IP, device, browser, OS, login history)
 - Enhanced admin panel with user activity statistics

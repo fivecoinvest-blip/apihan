@@ -214,8 +214,29 @@ $totalGames = $pdo->query("SELECT COUNT(*) FROM games WHERE is_active = 1")->fet
 $totalBets = $pdo->query("SELECT COUNT(*) FROM transactions WHERE type = 'bet'")->fetchColumn();
 $totalRevenue = $pdo->query("SELECT SUM(amount) FROM transactions WHERE type = 'bet'")->fetchColumn() ?? 0;
 
-// Get all games
-$games = $pdo->query("SELECT * FROM games ORDER BY sort_order ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
+// Handle AJAX request for loading more games
+if (isset($_GET['load_games'])) {
+    $offset = isset($_GET['offset']) ? intval($_GET['offset']) : 0;
+    $limit = 20;
+    
+    $stmt = $pdo->prepare("SELECT * FROM games ORDER BY sort_order ASC, name ASC LIMIT ? OFFSET ?");
+    $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+    $stmt->bindValue(2, $offset, PDO::PARAM_INT);
+    $stmt->execute();
+    $games = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    header('Content-Type: application/json');
+    echo json_encode($games);
+    exit;
+}
+
+// Initial load - get first 20 games
+$gamesPerLoad = 20;
+$totalGamesCount = $pdo->query("SELECT COUNT(*) FROM games")->fetchColumn();
+$stmt = $pdo->prepare("SELECT * FROM games ORDER BY sort_order ASC, name ASC LIMIT ?");
+$stmt->bindValue(1, $gamesPerLoad, PDO::PARAM_INT);
+$stmt->execute();
+$games = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get all users with tracking info
 $users = $pdo->query("
@@ -281,7 +302,9 @@ $transactions = $pdo->query("
 <html>
 <head>
     <title>Admin - Game Management</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
@@ -292,10 +315,13 @@ $transactions = $pdo->query("
         .header { 
             background: #1a1f36; 
             border-bottom: 1px solid #2d3548;
-            padding: 16px 24px; 
+            padding: 12px 16px; 
             display: flex; 
             justify-content: space-between; 
             align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 999;
         }
         .header h1 { 
             font-size: 20px; 
@@ -310,6 +336,7 @@ $transactions = $pdo->query("
             border-radius: 6px;
             font-size: 14px;
             transition: all 0.2s;
+            white-space: nowrap;
         }
         .header a:hover { background: #2d3548; color: #fff; }
         .container { max-width: 1400px; margin: 24px auto; padding: 0 24px; }
@@ -436,14 +463,16 @@ $transactions = $pdo->query("
             text-decoration: none; 
             display: inline-block;
             transition: all 0.2s;
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
         }
         .btn:hover { background: #2563eb; }
         .btn-small { padding: 6px 12px; font-size: 13px; }
         .btn-danger { background: #dc2626; }
         .btn-danger:hover { background: #b91c1c; }
         .game-grid { 
-            display: grid; 
-            grid-template-columns: repeat(10, 1fr); 
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
             gap: 16px;
             padding: 24px;
         }
@@ -457,7 +486,7 @@ $transactions = $pdo->query("
         .game-card:hover { border-color: #3b82f6; transform: translateY(-2px); }
         .game-card.inactive { opacity: 0.5; }
         .game-image { 
-            width: 100%; 
+            width: 100%;
             height: 160px; 
             object-fit: cover; 
             background: #0f1626;
@@ -564,22 +593,124 @@ $transactions = $pdo->query("
             line-height: 1;
         }
         .close:hover { color: #ffffff; }
-        @media (max-width: 1600px) {
-            .game-grid { grid-template-columns: repeat(8, 1fr); }
-        }
         @media (max-width: 1200px) {
-            .game-grid { grid-template-columns: repeat(6, 1fr); }
+            .game-grid { grid-template-columns: repeat(3, 1fr); }
         }
         @media (max-width: 900px) {
-            .game-grid { grid-template-columns: repeat(4, 1fr); }
+            .game-grid { grid-template-columns: repeat(2, 1fr); }
         }
         @media (max-width: 768px) {
-            .game-grid { grid-template-columns: repeat(3, 1fr); }
-            .stats { grid-template-columns: 1fr; }
-            .tabs { overflow-x: scroll; }
+            body { font-size: 14px; }
+            .header { padding: 10px 12px; }
+            .header h1 { font-size: 16px; }
+            .header a { padding: 6px 12px; font-size: 12px; }
+            .container { padding: 0 12px; margin: 16px auto; }
+            .game-grid { 
+                grid-template-columns: 1fr; 
+                gap: 12px;
+                padding: 16px;
+            }
+            .game-card {
+                display: flex;
+                flex-direction: row;
+                align-items: stretch;
+            }
+            .game-image {
+                width: 120px;
+                min-width: 120px;
+                height: auto;
+            }
+            .game-info {
+                flex: 1;
+                padding: 12px;
+            }
+            .game-info h3 { font-size: 14px; }
+            .game-meta { font-size: 12px; }
+            .game-actions {
+                padding: 8px 12px;
+                flex-direction: column;
+                width: auto;
+                min-width: 80px;
+                border-left: 1px solid #2d3548;
+                border-top: none;
+            }
+            .stats { 
+                grid-template-columns: 1fr; 
+                gap: 12px;
+            }
+            .stat-card { padding: 16px; }
+            .stat-card h3 { font-size: 12px; }
+            .stat-card .value { font-size: 24px; }
+            .tabs { 
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+            }
+            .tabs::-webkit-scrollbar { display: none; }
+            .tab { 
+                padding: 10px 16px;
+                font-size: 13px;
+                white-space: nowrap;
+            }
+            .table-container {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            table { min-width: 800px; }
+            th, td { padding: 12px 16px; font-size: 13px; }
+            .btn { padding: 8px 12px; font-size: 13px; min-height: 44px; }
+            .btn-small { padding: 5px 10px; font-size: 12px; min-height: 36px; }
+            .modal-content {
+                margin: 20px;
+                max-width: calc(100% - 40px);
+                padding: 20px;
+            }
+            .form-group input,
+            .form-group select,
+            .form-group textarea {
+                font-size: 16px; /* Prevents iOS zoom */
+            }
         }
-        @media (max-width: 600px) {
-            .game-grid { grid-template-columns: repeat(2, 1fr); }
+        @media (max-width: 480px) {
+            .header h1 { font-size: 14px; }
+            .header a { padding: 5px 10px; font-size: 11px; }
+            .container { padding: 0 8px; }
+            .game-grid { padding: 12px; gap: 10px; }
+            .game-image { width: 100px; min-width: 100px; }
+            .game-info { padding: 10px; }
+            .game-info h3 { font-size: 13px; }
+            .game-actions { min-width: 70px; padding: 6px 10px; }
+            .btn-small { padding: 4px 8px; font-size: 11px; min-height: 32px; }
+            .stat-card .value { font-size: 20px; }
+            .modal-content { margin: 10px; padding: 16px; }
+            th, td { padding: 10px 12px; font-size: 12px; }
+        }
+            .btn-small { padding: 4px 8px; font-size: 11px; }
+            .stat-card .value { font-size: 20px; }
+            .modal-content { margin: 10px; padding: 16px; }
+        }
+        .loading-indicator {
+            display: none;
+            text-align: center;
+            padding: 40px;
+            color: #9ca3af;
+            font-size: 16px;
+        }
+        .loading-indicator.active {
+            display: block;
+        }
+        .spinner {
+            border: 3px solid #2d3548;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 12px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
     </style>
 </head>
@@ -636,11 +767,12 @@ $transactions = $pdo->query("
 
         <!-- Games Tab -->
         <div id="games-tab" class="tab-content active">
-            <div style="margin-bottom: 20px;">
+            <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
                 <button class="btn" onclick="showModal('addGameModal')">➕ Add New Game</button>
+                <span style="color: #9ca3af;" id="games-counter">Showing <span id="loaded-count"><?php echo count($games); ?></span> of <?php echo $totalGamesCount; ?> games</span>
             </div>
 
-            <div class="game-grid">
+            <div class="game-grid" id="game-grid">
                 <?php foreach ($games as $game): ?>
                     <div class="game-card <?php echo $game['is_active'] ? '' : 'inactive'; ?>">
                         <div class="game-image" onclick="uploadImage(<?php echo $game['id']; ?>, '<?php echo htmlspecialchars($game['name'], ENT_QUOTES); ?>')">
@@ -666,7 +798,99 @@ $transactions = $pdo->query("
                     </div>
                 <?php endforeach; ?>
             </div>
+            
+            <!-- Loading Indicator -->
+            <div class="loading-indicator" id="loading-indicator">
+                <div class="spinner"></div>
+                <p>Loading more games...</p>
+            </div>
         </div>
+        
+        <script>
+        let gamesOffset = <?php echo count($games); ?>;
+        let totalGames = <?php echo $totalGamesCount; ?>;
+        let isLoading = false;
+        
+        // Infinite scroll for games
+        window.addEventListener('scroll', function() {
+            if (document.getElementById('games-tab').classList.contains('active') && !isLoading && gamesOffset < totalGames) {
+                const scrollPosition = window.innerHeight + window.scrollY;
+                const pageHeight = document.documentElement.scrollHeight;
+                
+                // Load more when user is 300px from bottom
+                if (scrollPosition >= pageHeight - 300) {
+                    loadMoreGames();
+                }
+            }
+        });
+        
+        function loadMoreGames() {
+            if (isLoading || gamesOffset >= totalGames) return;
+            
+            isLoading = true;
+            document.getElementById('loading-indicator').classList.add('active');
+            
+            fetch('?load_games=1&offset=' + gamesOffset)
+                .then(response => response.json())
+                .then(games => {
+                    if (games.length > 0) {
+                        const gameGrid = document.getElementById('game-grid');
+                        
+                        games.forEach(game => {
+                            const gameCard = createGameCard(game);
+                            gameGrid.insertAdjacentHTML('beforeend', gameCard);
+                        });
+                        
+                        gamesOffset += games.length;
+                        document.getElementById('loaded-count').textContent = gamesOffset;
+                    }
+                    
+                    isLoading = false;
+                    document.getElementById('loading-indicator').classList.remove('active');
+                })
+                .catch(error => {
+                    console.error('Error loading games:', error);
+                    isLoading = false;
+                    document.getElementById('loading-indicator').classList.remove('active');
+                });
+        }
+        
+        function createGameCard(game) {
+            const imageHtml = game.image ? 
+                `<img src="${escapeHtml(game.image)}" alt="${escapeHtml(game.name)}">` : 
+                '🎰';
+            
+            const statusText = game.is_active == 1 ? '✅ Active' : '❌ Inactive';
+            const inactiveClass = game.is_active == 1 ? '' : ' inactive';
+            
+            return `
+                <div class="game-card${inactiveClass}">
+                    <div class="game-image" onclick="uploadImage(${game.id}, '${escapeHtml(game.name)}')">
+                        ${imageHtml}
+                    </div>
+                    <div class="game-info">
+                        <h3>${escapeHtml(game.name)}</h3>
+                        <div class="game-meta">
+                            <strong>ID:</strong> ${escapeHtml(game.game_uid)}<br>
+                            <strong>Provider:</strong> ${escapeHtml(game.provider)}<br>
+                            <strong>Category:</strong> ${escapeHtml(game.category)}<br>
+                            <strong>Status:</strong> ${statusText}
+                        </div>
+                        <div class="game-actions">
+                            <button class="btn btn-small" onclick='editGame(${JSON.stringify(game)})'>✏️ Edit</button>
+                            <a href="?delete=${game.id}" class="btn btn-small btn-danger" onclick="return confirm('Delete this game?')">🗑️ Delete</a>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        </script>
 
         <!-- Users Tab -->
         <div id="users-tab" class="tab-content">

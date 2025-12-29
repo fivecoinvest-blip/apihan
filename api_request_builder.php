@@ -78,7 +78,8 @@ function sendLaunchGameRequest(array $params): array {
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_TIMEOUT => 30,
+            CURLOPT_TIMEOUT => 60,           // Increased timeout to 60 seconds
+            CURLOPT_CONNECTTIMEOUT => 30,    // Connection timeout
             CURLOPT_HTTPHEADER => [
                 'Content-Type: application/json',
                 'Accept: application/json'

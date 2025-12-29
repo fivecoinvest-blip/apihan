@@ -21,8 +21,53 @@ if ($loggedIn) {
 // Get games from database
 $db = Database::getInstance();
 $pdo = $db->getConnection();
-$stmt = $pdo->query("SELECT * FROM games WHERE is_active = 1 ORDER BY sort_order ASC, name ASC");
+
+// Handle AJAX request for loading more games
+if (isset($_GET['load_games'])) {
+    $offset = isset($_GET['offset']) ? intval($_GET['offset']) : 0;
+    $category = isset($_GET['category']) ? $_GET['category'] : 'all';
+    $limit = 20;
+    
+    if ($category === 'all') {
+        $stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 ORDER BY sort_order ASC, name ASC LIMIT ? OFFSET ?");
+        $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+        $stmt->bindValue(2, $offset, PDO::PARAM_INT);
+    } else {
+        $stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 AND category = ? ORDER BY sort_order ASC, name ASC LIMIT ? OFFSET ?");
+        $stmt->execute([$category, $limit, $offset]);
+        $stmt->bindValue(1, $category, PDO::PARAM_STR);
+        $stmt->bindValue(2, $limit, PDO::PARAM_INT);
+        $stmt->bindValue(3, $offset, PDO::PARAM_INT);
+    }
+    $stmt->execute();
+    $games = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    $result = array_map(function($g) {
+        return [
+            'id' => $g['game_uid'],
+            'name' => $g['name'],
+            'image' => $g['image'] && file_exists($g['image']) ? $g['image'] : null,
+            'category' => $g['category'],
+            'provider' => $g['provider']
+        ];
+    }, $games);
+    
+    header('Content-Type: application/json');
+    echo json_encode($result);
+    exit;
+}
+
+// Initial load - first 20 games
+$stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 ORDER BY sort_order ASC, name ASC LIMIT 20");
+$stmt->execute();
 $gamesFromDb = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Get unique categories for navigation
+$categoriesStmt = $pdo->query("SELECT DISTINCT category FROM games WHERE is_active = 1 ORDER BY category");
+$categories = $categoriesStmt->fetchAll(PDO::FETCH_COLUMN);
+
+// Get total games count
+$totalGamesCount = $pdo->query("SELECT COUNT(*) FROM games WHERE is_active = 1")->fetchColumn();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -251,6 +296,34 @@ $gamesFromDb = $stmt->fetchAll(PDO::FETCH_ASSOC);
             color: #fff;
         }
         
+        /* Loading Indicator */
+        .loading-indicator {
+            display: none;
+            text-align: center;
+            padding: 40px;
+            color: #9ca3af;
+            font-size: 16px;
+        }
+        
+        .loading-indicator.active {
+            display: block;
+        }
+        
+        .spinner {
+            border: 3px solid #2d3548;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 12px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
         /* Mobile Menu */
         .mobile-menu {
             display: none;
@@ -329,19 +402,38 @@ $gamesFromDb = $stmt->fetchAll(PDO::FETCH_ASSOC);
     <div class="nav">
         <div class="nav-tabs">
             <button class="nav-tab active" onclick="showCategory('all')">🎮 All Games</button>
-            <button class="nav-tab" onclick="showCategory('slots')">🎰 Slots</button>
-            <button class="nav-tab" onclick="showCategory('cards')">🃏 Card Games</button>
-            <button class="nav-tab" onclick="showCategory('roulette')">🎡 Roulette</button>
-            <button class="nav-tab" onclick="showCategory('live')">📹 Live Casino</button>
+            <?php 
+            $categoryIcons = [
+                'Slots' => '🎰',
+                'Table' => '🃏',
+                'Fishing' => '🎣',
+                'Arcade' => '🕹️',
+                'Live' => '📹'
+            ];
+            foreach ($categories as $cat): 
+                $icon = $categoryIcons[$cat] ?? '🎲';
+            ?>
+                <button class="nav-tab" onclick="showCategory('<?php echo strtolower($cat); ?>')"><?php echo $icon . ' ' . htmlspecialchars($cat); ?></button>
+            <?php endforeach; ?>
         </div>
     </div>
     
     <!-- Main Content -->
     <div class="container">
-        <h2 class="section-title">🔥 Popular Games</h2>
+        <h2 class="section-title">
+            <span id="section-emoji">🔥</span> 
+            <span id="section-text">Popular Games</span>
+            <span style="color: #9ca3af; font-size: 14px; font-weight: normal; margin-left: auto;" id="games-counter">Loading...</span>
+        </h2>
         
         <div class="games-grid" id="games-grid">
             <!-- Games will be loaded here -->
+        </div>
+        
+        <!-- Loading Indicator -->
+        <div class="loading-indicator" id="loading-indicator">
+            <div class="spinner"></div>
+            <p>Loading more games...</p>
         </div>
     </div>
     
@@ -355,61 +447,168 @@ $gamesFromDb = $stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
     
     <script>
-        const games = <?php echo json_encode(array_map(function($g) {
+        let gamesOffset = 0;
+        let currentCategory = 'all';
+        let isLoading = false;
+        let hasMoreGames = true;
+        let totalGames = <?php echo $totalGamesCount; ?>;
+        const loggedIn = <?php echo $loggedIn ? 'true' : 'false'; ?>;
+        
+        // Initial games from PHP
+        const initialGames = <?php echo json_encode(array_map(function($g) {
             return [
                 'id' => $g['game_uid'],
                 'name' => $g['name'],
-                'icon' => $g['image'] && file_exists($g['image']) ? $g['image'] : '🎰',
-                'category' => strtolower($g['category']),
+                'image' => $g['image'] && file_exists($g['image']) ? $g['image'] : null,
+                'category' => $g['category'],
                 'provider' => $g['provider']
             ];
         }, $gamesFromDb)); ?>;
         
-        function renderGames(filter = 'all') {
-            const grid = document.getElementById('games-grid');
-            const filtered = filter === 'all' ? games : games.filter(g => g.category === filter);
-            
-            grid.innerHTML = filtered.map(game => {
-                const isImage = game.icon.startsWith('images/');
-                const iconHtml = isImage 
-                    ? `<img src="${game.icon}" alt="${game.name}">` 
-                    : `<div style="font-size: 60px; display: flex; align-items: center; justify-content: center; height: 100%;">${game.icon}</div>`;
+        // Render initial games
+        renderGames(initialGames);
+        gamesOffset = initialGames.length;
+        updateCounter();
+        
+        // Infinite scroll
+        window.addEventListener('scroll', function() {
+            if (!isLoading && hasMoreGames) {
+                const scrollPosition = window.innerHeight + window.scrollY;
+                const pageHeight = document.documentElement.scrollHeight;
                 
-                return `
-                    <div class="game-card" onclick="playGame('${game.id}', '${game.name}')">
-                        <div class="game-image">${iconHtml}</div>
-                        <div class="game-name">${game.name}</div>
-                        <div class="play-overlay">
-                            <button class="play-btn">▶ Play</button>
-                        </div>
+                if (scrollPosition >= pageHeight - 300) {
+                    loadMoreGames();
+                }
+            }
+        });
+        
+        function loadMoreGames() {
+            if (isLoading || !hasMoreGames) return;
+            
+            isLoading = true;
+            document.getElementById('loading-indicator').classList.add('active');
+            
+            fetch(`?load_games=1&offset=${gamesOffset}&category=${currentCategory}`)
+                .then(response => response.json())
+                .then(games => {
+                    if (games.length > 0) {
+                        appendGames(games);
+                        gamesOffset += games.length;
+                        updateCounter();
+                    }
+                    
+                    if (games.length < 20) {
+                        hasMoreGames = false;
+                    }
+                    
+                    isLoading = false;
+                    document.getElementById('loading-indicator').classList.remove('active');
+                })
+                .catch(error => {
+                    console.error('Error loading games:', error);
+                    isLoading = false;
+                    document.getElementById('loading-indicator').classList.remove('active');
+                });
+        }
+        
+        function renderGames(games) {
+            const grid = document.getElementById('games-grid');
+            grid.innerHTML = games.map(createGameCard).join('');
+        }
+        
+        function appendGames(games) {
+            const grid = document.getElementById('games-grid');
+            grid.insertAdjacentHTML('beforeend', games.map(createGameCard).join(''));
+        }
+        
+        function createGameCard(game) {
+            const imageHtml = game.image 
+                ? `<img src="${game.image}" alt="${escapeHtml(game.name)}">` 
+                : '<div style="font-size: 60px; display: flex; align-items: center; justify-content: center; height: 100%;">🎰</div>';
+            
+            return `
+                <div class="game-card" onclick="playGame('${game.id}', '${escapeHtml(game.name)}')">
+                    <div class="game-image">${imageHtml}</div>
+                    <div class="game-info">
+                        <div class="game-name">${escapeHtml(game.name)}</div>
                     </div>
-                `;
-            }).join('');
+                    <div class="play-overlay">
+                        <button class="play-btn">Play</button>
+                    </div>
+                </div>
+            `;
         }
         
         function showCategory(category) {
             document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('active'));
             event.target.classList.add('active');
-            renderGames(category);
+            
+            currentCategory = category;
+            gamesOffset = 0;
+            hasMoreGames = true;
+            
+            // Update section title
+            const categoryTitles = {
+                'all': { emoji: '🔥', text: 'Popular Games' },
+                'slots': { emoji: '🎰', text: 'Slots Games' },
+                'table': { emoji: '🃏', text: 'Table Games' },
+                'fishing': { emoji: '🎣', text: 'Fishing Games' },
+                'arcade': { emoji: '🕹️', text: 'Arcade Games' },
+                'live': { emoji: '📹', text: 'Live Casino' }
+            };
+            
+            const title = categoryTitles[category] || categoryTitles['all'];
+            document.getElementById('section-emoji').textContent = title.emoji;
+            document.getElementById('section-text').textContent = title.text;
+            
+            // Clear and load new games
+            document.getElementById('games-grid').innerHTML = '';
+            document.getElementById('games-counter').textContent = 'Loading...';
+            
+            isLoading = true;
+            fetch(`?load_games=1&offset=0&category=${category}`)
+                .then(response => response.json())
+                .then(games => {
+                    renderGames(games);
+                    gamesOffset = games.length;
+                    updateCounter();
+                    
+                    if (games.length < 20) {
+                        hasMoreGames = false;
+                    }
+                    
+                    isLoading = false;
+                })
+                .catch(error => {
+                    console.error('Error loading games:', error);
+                    isLoading = false;
+                });
+        }
+        
+        function updateCounter() {
+            document.getElementById('games-counter').textContent = 
+                `Showing ${gamesOffset} games`;
         }
         
         function playGame(gameId, gameName) {
-            <?php if ($loggedIn): ?>
-            window.location.href = `play_game.php?game_id=${gameId}&game_name=${encodeURIComponent(gameName)}`;
-            <?php else: ?>
-            window.location.href = 'login.php';
-            <?php endif; ?>
+            if (loggedIn) {
+                window.location.href = `play_game.php?game_id=${gameId}&game_name=${encodeURIComponent(gameName)}`;
+            } else {
+                window.location.href = 'login.php';
+            }
         }
         
-        // Initial render
-        renderGames();
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
         
         // Install PWA prompt
         let deferredPrompt;
         window.addEventListener('beforeinstallprompt', (e) => {
             e.preventDefault();
             deferredPrompt = e;
-            // Show install button
             console.log('PWA installable');
         });
     </script>

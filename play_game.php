@@ -159,8 +159,16 @@ $result = sendLaunchGameRequest($params);
     <?php else: ?>
         <div class="error-container">
             <div class="error-message">
-                <h3>Failed to load game</h3>
+                <h3>⚠️ Failed to load game</h3>
                 <p><?php echo htmlspecialchars($result['error']); ?></p>
+                <?php if (strpos($result['error'], 'timeout') !== false || strpos($result['error'], 'deadline exceeded') !== false): ?>
+                    <p style="margin-top: 15px; font-size: 14px; opacity: 0.9;">
+                        <strong>Tip:</strong> The game server is responding slowly. Please try again in a moment or contact support if the problem persists.
+                    </p>
+                <?php endif; ?>
+                <button onclick="location.href='index.php'" style="margin-top: 20px; padding: 12px 24px; background: #3b82f6; border: none; border-radius: 8px; color: white; font-weight: 600; cursor: pointer;">
+                    🔄 Try Again
+                </button>
             </div>
             <button class="floating-home" id="floatingBtn" title="Drag to move">🏠</button>
         </div>
