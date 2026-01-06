@@ -20,10 +20,43 @@ $userCurrency = $currentUser['currency'] ?? 'PHP';
 $gameId = $_GET['game_id'] ?? '634';
 $gameName = $_GET['game_name'] ?? 'Casino Game';
 
-// Record game play to database
+// Check if game exists and is active
 try {
     $db = Database::getInstance();
     $pdo = $db->getConnection();
+    
+    $stmt = $pdo->prepare("SELECT game_uid, name, is_active FROM games WHERE game_uid = ?");
+    $stmt->execute([$gameId]);
+    $gameData = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    // If game not found or inactive, show error
+    if (!$gameData) {
+        $result = [
+            'success' => false,
+            'error' => 'Game not found in our database',
+            'error_code' => 'GAME_NOT_FOUND'
+        ];
+        goto render_page;
+    }
+    
+    if ($gameData['is_active'] != 1) {
+        $result = [
+            'success' => false,
+            'error' => 'This game is currently inactive',
+            'error_code' => 'GAME_INACTIVE'
+        ];
+        goto render_page;
+    }
+    
+    // Update game name from database
+    $gameName = $gameData['name'];
+    
+} catch (Exception $e) {
+    error_log("Failed to check game: " . $e->getMessage());
+}
+
+// Record game play to database
+try {
     $stmt = $pdo->prepare("INSERT INTO game_plays (user_id, game_uid, game_name) VALUES (?, ?, ?)");
     $stmt->execute([$_SESSION['user_id'], $gameId, $gameName]);
 } catch (Exception $e) {
@@ -44,6 +77,8 @@ $params = createGameLaunchRequest(
 );
 
 $result = sendLaunchGameRequest($params);
+
+render_page:
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -71,32 +106,62 @@ $result = sendLaunchGameRequest($params);
         .floating-home {
             position: fixed;
             top: 20px;
-            right: 20px;
-            width: 50px;
-            height: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 60px;
+            height: 60px;
             background: linear-gradient(135deg, #3b82f6, #2563eb);
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: move;
-            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+            box-shadow: 0 6px 25px rgba(59, 130, 246, 0.6);
             z-index: 10000;
-            transition: box-shadow 0.3s ease;
-            border: 3px solid rgba(255, 255, 255, 0.2);
+            transition: all 0.3s ease;
+            border: 3px solid rgba(255, 255, 255, 0.3);
             color: white;
-            font-size: 22px;
+            font-size: 26px;
             touch-action: none;
             user-select: none;
         }
         
         .floating-home:hover {
-            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.6);
+            box-shadow: 0 8px 35px rgba(59, 130, 246, 0.8);
+            transform: translateX(-50%) scale(1.1);
+        }
+        
+        .floating-home:active {
+            transform: translateX(-50%) scale(0.95);
         }
         
         .floating-home.dragging {
             transition: none;
             opacity: 0.8;
+            transform: none;
+        }
+        
+        .home-tooltip {
+            position: fixed;
+            top: 90px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.85);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            white-space: nowrap;
+            z-index: 10001;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        .floating-home:hover + .home-tooltip {
+            opacity: 1;
         }
         
         .game-container {
@@ -177,11 +242,16 @@ $result = sendLaunchGameRequest($params);
         
         @media (max-width: 768px) {
             .floating-home {
-                width: 45px;
-                height: 45px;
-                font-size: 20px;
+                width: 55px;
+                height: 55px;
+                font-size: 24px;
                 top: 15px;
-                right: 15px;
+            }
+            
+            .home-tooltip {
+                top: 80px;
+                font-size: 12px;
+                padding: 6px 12px;
             }
         }
     </style>
@@ -202,24 +272,42 @@ $result = sendLaunchGameRequest($params);
                     allowfullscreen></iframe>
         </div>
         <button class="floating-home" id="floatingBtn" title="Drag to move">🏠</button>
+        <div class="home-tooltip">Back to Lobby</div>
     <?php else: ?>
         <div class="error-container" id="errorContainer">
             <div class="error-message">
-                <h3>⚠️ Failed to load game</h3>
-                <p><?php echo htmlspecialchars($result['error']); ?></p>
-                <?php if (strpos($result['error'], 'timeout') !== false || strpos($result['error'], 'deadline exceeded') !== false): ?>
+                <?php if (isset($result['error_code']) && ($result['error_code'] === 'GAME_NOT_FOUND' || $result['error_code'] === 'GAME_INACTIVE')): ?>
+                    <h3>🎮 Game Not Available</h3>
+                    <p><?php echo htmlspecialchars($result['error']); ?></p>
                     <p style="margin-top: 15px; font-size: 14px; opacity: 0.9;">
-                        <strong>Tip:</strong> The game server is responding slowly. This error may disappear if the game loads successfully.
+                        This game may have been removed or temporarily disabled.
                     </p>
-                    <p style="margin-top: 10px; font-size: 13px; opacity: 0.8;">
-                        Waiting for game to load...
+                <?php elseif (strpos($result['error'], 'under maintenance') !== false || (isset($result['error_code']) && $result['error_code'] == 9)): ?>
+                    <h3>🔧 Game Under Maintenance</h3>
+                    <p>This game is temporarily under maintenance by the provider.</p>
+                    <p style="margin-top: 15px; font-size: 14px; opacity: 0.9;">
+                        Please try another game or check back later.
                     </p>
+                <?php else: ?>
+                    <h3>⚠️ Failed to load game</h3>
+                    <p><?php echo htmlspecialchars($result['error']); ?></p>
+                    <?php if (strpos($result['error'], 'timeout') !== false || strpos($result['error'], 'deadline exceeded') !== false): ?>
+                        <p style="margin-top: 15px; font-size: 14px; opacity: 0.9;">
+                            <strong>Tip:</strong> The game server is responding slowly. This error may disappear if the game loads successfully.
+                        </p>
+                        <p style="margin-top: 10px; font-size: 13px; opacity: 0.8;">
+                            Waiting for game to load...
+                        </p>
+                    <?php endif; ?>
                 <?php endif; ?>
-                <button onclick="location.href='index.php'" style="margin-top: 20px; padding: 12px 24px; background: #3b82f6; border: none; border-radius: 8px; color: white; font-weight: 600; cursor: pointer;">
-                    ← Back to Lobby
-                </button>
+                <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+                    <button onclick="location.href='index.php'" style="padding: 12px 24px; background: #3b82f6; border: none; border-radius: 8px; color: white; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                        🏠 Back to Lobby
+                    </button>
+                </div>
             </div>
             <button class="floating-home" id="floatingBtn" title="Drag to move">🏠</button>
+            <div class="home-tooltip">Back to Lobby</div>
         </div>
     <?php endif; ?>
     
@@ -265,76 +353,77 @@ $result = sendLaunchGameRequest($params);
         }, 120000); // 2 minutes = 120,000 milliseconds
         
         const floatingBtn = document.getElementById('floatingBtn');
-        let isDragging = false;
-        let startX, startY, startLeft, startTop;
-        let hasMoved = false;
+        if (floatingBtn) {
+            let isDragging = false;
+            let startX, startY, startLeft, startTop;
+            let hasMoved = false;
 
-        function handleStart(e) {
-            isDragging = true;
-            hasMoved = false;
-            floatingBtn.classList.add('dragging');
-            
-            const touch = e.type === 'touchstart' ? e.touches[0] : e;
-            startX = touch.clientX;
-            startY = touch.clientY;
-            
-            const rect = floatingBtn.getBoundingClientRect();
-            startLeft = rect.left;
-            startTop = rect.top;
-            
-            e.preventDefault();
-        }
-
-        function handleMove(e) {
-            if (!isDragging) return;
-            
-            const touch = e.type === 'touchmove' ? e.touches[0] : e;
-            const deltaX = touch.clientX - startX;
-            const deltaY = touch.clientY - startY;
-            
-            if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
-                hasMoved = true;
+            function handleStart(e) {
+                isDragging = true;
+                hasMoved = false;
+                floatingBtn.classList.add('dragging');
+                
+                const touch = e.type === 'touchstart' ? e.touches[0] : e;
+                startX = touch.clientX;
+                startY = touch.clientY;
+                
+                const rect = floatingBtn.getBoundingClientRect();
+                startLeft = rect.left;
+                startTop = rect.top;
+                
+                e.preventDefault();
             }
-            
-            let newLeft = startLeft + deltaX;
-            let newTop = startTop + deltaY;
-            
-            // Keep within viewport bounds
-            const btnWidth = floatingBtn.offsetWidth;
-            const btnHeight = floatingBtn.offsetHeight;
-            newLeft = Math.max(10, Math.min(window.innerWidth - btnWidth - 10, newLeft));
-            newTop = Math.max(10, Math.min(window.innerHeight - btnHeight - 10, newTop));
-            
-            floatingBtn.style.left = newLeft + 'px';
-            floatingBtn.style.top = newTop + 'px';
-            floatingBtn.style.right = 'auto';
-            floatingBtn.style.bottom = 'auto';
-            
-            e.preventDefault();
-        }
 
-        function handleEnd(e) {
-            if (!isDragging) return;
-            isDragging = false;
-            floatingBtn.classList.remove('dragging');
-            
-            // Only navigate if button wasn't moved
-            if (!hasMoved) {
-                location.href = 'index.php';
+            function handleMove(e) {
+                if (!isDragging) return;
+                
+                const touch = e.type === 'touchmove' ? e.touches[0] : e;
+                const deltaX = touch.clientX - startX;
+                const deltaY = touch.clientY - startY;
+                
+                if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+                    hasMoved = true;
+                }
+                
+                let newLeft = startLeft + deltaX;
+                let newTop = startTop + deltaY;
+                
+                // Keep within viewport bounds
+                const btnWidth = floatingBtn.offsetWidth;
+                const btnHeight = floatingBtn.offsetHeight;
+                newLeft = Math.max(10, Math.min(window.innerWidth - btnWidth - 10, newLeft));
+                newTop = Math.max(10, Math.min(window.innerHeight - btnHeight - 10, newTop));
+                
+                floatingBtn.style.left = newLeft + 'px';
+                floatingBtn.style.top = newTop + 'px';
+                floatingBtn.style.transform = 'none';
+                
+                e.preventDefault();
             }
-            
-            e.preventDefault();
+
+            function handleEnd(e) {
+                if (!isDragging) return;
+                isDragging = false;
+                floatingBtn.classList.remove('dragging');
+                
+                // Only navigate if button wasn't moved
+                if (!hasMoved) {
+                    location.href = 'index.php';
+                }
+                
+                e.preventDefault();
+            }
+
+            // Mouse events
+            floatingBtn.addEventListener('mousedown', handleStart);
+            document.addEventListener('mousemove', handleMove);
+            document.addEventListener('mouseup', handleEnd);
+
+            // Touch events
+            floatingBtn.addEventListener('touchstart', handleStart, { passive: false });
+            document.addEventListener('touchmove', handleMove, { passive: false });
+            document.addEventListener('touchend', handleEnd, { passive: false });
         }
-
-        // Mouse events
-        floatingBtn.addEventListener('mousedown', handleStart);
-        document.addEventListener('mousemove', handleMove);
-        document.addEventListener('mouseup', handleEnd);
-
-        // Touch events
-        floatingBtn.addEventListener('touchstart', handleStart, { passive: false });
-        document.addEventListener('touchmove', handleMove, { passive: false });
-        document.addEventListener('touchend', handleEnd, { passive: false });
     </script>
 </body>
 </html>

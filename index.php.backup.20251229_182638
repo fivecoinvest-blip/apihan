@@ -79,8 +79,8 @@ if (isset($_GET['load_games'])) {
         exit;
     }
     
-    // Regular pagination (no search) - RANDOMIZED
-    $cacheKey = "games:list:{$category}:{$offset}:{$limit}:random_" . date('YmdH'); // Changes every hour
+    // Regular pagination (no search)
+    $cacheKey = "games:list:{$category}:{$offset}:{$limit}";
     $cachedGames = $cache->get($cacheKey);
     
     if ($cachedGames !== false) {
@@ -90,11 +90,11 @@ if (isset($_GET['load_games'])) {
     }
     
     if ($category === 'all') {
-        $stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 ORDER BY RAND() LIMIT ? OFFSET ?");
+        $stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 ORDER BY sort_order ASC, name ASC LIMIT ? OFFSET ?");
         $stmt->bindValue(1, $limit, PDO::PARAM_INT);
         $stmt->bindValue(2, $offset, PDO::PARAM_INT);
     } else {
-        $stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 AND category = ? ORDER BY RAND() LIMIT ? OFFSET ?");
+        $stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 AND category = ? ORDER BY sort_order ASC, name ASC LIMIT ? OFFSET ?");
         $stmt->bindValue(1, $category, PDO::PARAM_STR);
         $stmt->bindValue(2, $limit, PDO::PARAM_INT);
         $stmt->bindValue(3, $offset, PDO::PARAM_INT);
@@ -112,40 +112,21 @@ if (isset($_GET['load_games'])) {
         ];
     }, $games);
     
-    // Cache for 1 hour with random seed
-    $cache->set($cacheKey, $result, 3600);
+    // Cache for 15 minutes
+    $cache->set($cacheKey, $result, RedisCache::CACHE_15_MINUTES);
     
     header('Content-Type: application/json');
     echo json_encode($result);
     exit;
 }
 
-// Initial load - first 20 games (with caching) - RANDOMIZED
-$cacheKey = "games:initial:20:random_" . date('YmdH'); // Changes every hour
+// Initial load - first 20 games (with caching)
+$cacheKey = "games:initial:20";
 $gamesFromDb = $cache->remember($cacheKey, function() use ($pdo) {
-    $stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 ORDER BY RAND() LIMIT 20");
+    $stmt = $pdo->prepare("SELECT * FROM games WHERE is_active = 1 ORDER BY sort_order ASC, name ASC LIMIT 20");
     $stmt->execute();
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
-}, 3600); // 1 hour cache
-
-// Get recent plays for logged-in users
-$recentPlays = [];
-if ($loggedIn) {
-    $cacheKey = "user:{$_SESSION['user_id']}:recent_plays";
-    $recentPlays = $cache->remember($cacheKey, function() use ($pdo) {
-        $stmt = $pdo->prepare("
-            SELECT gp.game_uid, gp.game_name, g.image, g.provider, g.category, MAX(gp.started_at) as last_played
-            FROM game_plays gp
-            LEFT JOIN games g ON gp.game_uid = g.game_uid
-            WHERE gp.user_id = ? AND g.is_active = 1
-            GROUP BY gp.game_uid, gp.game_name, g.image, g.provider, g.category
-            ORDER BY last_played DESC
-            LIMIT 10
-        ");
-        $stmt->execute([$_SESSION['user_id']]);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
-    }, 300); // 5 minutes cache
-}
+}, RedisCache::CACHE_15_MINUTES);
 
 // Get unique categories for navigation (with caching)
 $cacheKey = "games:categories";
@@ -765,41 +746,6 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
     
     <!-- Main Content -->
     <div class="container">
-        <?php if ($loggedIn && !empty($recentPlays)): ?>
-        <!-- Recent Plays Section -->
-        <div style="margin-bottom: 40px;">
-            <h2 class="section-title">
-                <span>🕐</span> 
-                <span>Recent Plays</span>
-                <span style="font-size: 14px; color: #9ca3af; font-weight: normal;"><?php echo count($recentPlays); ?> games</span>
-            </h2>
-            
-            <div style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 15px; -webkit-overflow-scrolling: touch;">
-                <?php foreach ($recentPlays as $game): ?>
-                    <div class="game-card" 
-                         style="min-width: 180px; flex-shrink: 0;" 
-                         onclick="playGame('<?php echo htmlspecialchars($game['game_uid'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($game['game_name'], ENT_QUOTES); ?>')">
-                        <div class="game-image">
-                            <?php if ($game['image'] && file_exists($game['image'])): ?>
-                                <img src="<?php echo htmlspecialchars($game['image']); ?>" 
-                                     alt="<?php echo htmlspecialchars($game['game_name']); ?>" 
-                                     loading="lazy">
-                            <?php else: ?>
-                                <div style="font-size: 60px; display: flex; align-items: center; justify-content: center; height: 100%;">🎰</div>
-                            <?php endif; ?>
-                        </div>
-                        <div class="game-info">
-                            <div class="game-name"><?php echo htmlspecialchars($game['game_name']); ?></div>
-                        </div>
-                        <div class="play-overlay">
-                            <button class="play-btn">Play Again</button>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-            </div>
-        </div>
-        <?php endif; ?>
-        
         <h2 class="section-title">
             <span id="section-emoji">🔥</span> 
             <span id="section-text">Popular Games</span>
@@ -858,43 +804,35 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
         // Store initial games
         allGames = initialGames;
         
-        // Initialize when DOM is ready
-        document.addEventListener('DOMContentLoaded', function() {
-            // Setup search functionality with debounce
-            const searchInput = document.getElementById('search-input');
-            const clearSearchBtn = document.getElementById('clear-search');
+        // Setup search functionality with debounce
+        const searchInput = document.getElementById('search-input');
+        const clearSearchBtn = document.getElementById('clear-search');
+        
+        searchInput.addEventListener('input', function(e) {
+            const query = e.target.value.trim();
             
-            if (searchInput && clearSearchBtn) {
-                searchInput.addEventListener('input', function(e) {
-                    const query = e.target.value.trim();
-                    
-                    // Show/hide clear button
-                    if (query) {
-                        clearSearchBtn.classList.add('visible');
-                    } else {
-                        clearSearchBtn.classList.remove('visible');
-                    }
-                    
-                    // Debounce search (wait 300ms after user stops typing)
-                    clearTimeout(searchTimeout);
-                    searchTimeout = setTimeout(function() {
-                        searchQuery = query;
-                        performSearch();
-                    }, 300);
-                });
-                
-                // Clear search on Escape key
-                searchInput.addEventListener('keydown', function(e) {
-                    if (e.key === 'Escape') {
-                        clearSearch();
-                    }
-                });
+            // Show/hide clear button
+            if (query) {
+                clearSearchBtn.classList.add('visible');
+            } else {
+                clearSearchBtn.classList.remove('visible');
             }
             
-            // Render initial games after all functions are defined
-            renderGames(initialGames);
-            gamesOffset = initialGames.length;
-            updateCounter();
+            // Debounce search (wait 300ms after user stops typing)
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(function() {
+                searchQuery = query;
+                performSearch();
+            }, 300);
+        });
+            filterGames();
+        });
+        
+        // Clear search on Escape key
+        searchInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                clearSearch();
+            }
         });
         
         // Infinite scroll (disabled when searching)
@@ -974,26 +912,14 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
         
         function renderGames(games) {
             const grid = document.getElementById('games-grid');
-            if (!grid) {
-                console.error('Games grid element not found');
-                return;
-            }
+            grid.innerHTML = games.map(createGameCard).join('');
             
+            // Show/hide empty state
             const emptyState = document.getElementById('empty-state');
-            
-            try {
-                grid.innerHTML = games.map(createGameCard).join('');
-                
-                // Show/hide empty state
-                if (games.length === 0) {
-                    if (emptyState) emptyState.classList.add('visible');
-                } else {
-                    if (emptyState) emptyState.classList.remove('visible');
-                }
-                
-                console.log('Rendered', games.length, 'games');
-            } catch (error) {
-                console.error('Error rendering games:', error);
+            if (games.length === 0) {
+                emptyState.classList.add('visible');
+            } else {
+                emptyState.classList.remove('visible');
             }
         }
         
@@ -1142,6 +1068,11 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
             }
         });
         <?php endif; ?>
+        
+        // Render initial games after all functions are defined
+        renderGames(initialGames);
+        gamesOffset = initialGames.length;
+        updateCounter();
     </script>
 </body>
 </html>

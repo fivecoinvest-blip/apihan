@@ -65,6 +65,16 @@ if (isset($_POST['admin_login'])) {
     }
 }
 
+// Handle cache clear
+if (isset($_GET['clear_cache'])) {
+    $cache = RedisCache::getInstance();
+    $cache->deletePattern('games:*');
+    $cache->deletePattern('admin:games:*');
+    $_SESSION['success'] = "All game caches cleared successfully!";
+    header("Location: admin.php");
+    exit;
+}
+
 // Check if admin is logged in
 if (!isset($_SESSION['admin_logged_in'])) {
     ?>
@@ -77,7 +87,7 @@ if (!isset($_SESSION['admin_logged_in'])) {
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             
-            body { 
+            body {
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
                 min-height: 100vh; 
@@ -369,10 +379,12 @@ if (isset($_POST['update_game'])) {
         $_POST['game_id']
     ]);
     
-    // Invalidate game caches
+    // Invalidate ALL game caches (both frontend and admin)
     $cache->deletePattern('games:*');
+    $cache->deletePattern('admin:games:*');
+    $cache->deletePattern('user:*:recent_plays');
     
-    $_SESSION['success'] = "Game updated successfully!";
+    $_SESSION['success'] = "Game updated successfully! Cache cleared.";
     header("Location: admin.php");
     exit;
 }
@@ -382,10 +394,12 @@ if (isset($_GET['delete'])) {
     $stmt = $pdo->prepare("DELETE FROM games WHERE id = ?");
     $stmt->execute([$_GET['delete']]);
     
-    // Invalidate game caches
+    // Invalidate ALL game caches (both frontend and admin)
     $cache->deletePattern('games:*');
+    $cache->deletePattern('admin:games:*');
+    $cache->deletePattern('user:*:recent_plays');
     
-    $_SESSION['success'] = "Game deleted successfully!";
+    $_SESSION['success'] = "Game deleted successfully! Cache cleared.";
     header("Location: admin.php");
     exit;
 }
@@ -410,10 +424,12 @@ if (isset($_POST['add_game'])) {
                 $_POST['sort_order']
             ]);
             
-            // Invalidate game caches
+            // Invalidate ALL game caches (both frontend and admin)
             $cache->deletePattern('games:*');
+            $cache->deletePattern('admin:games:*');
+            $cache->deletePattern('user:*:recent_plays');
             
-            $_SESSION['success'] = "Game added successfully!";
+            $_SESSION['success'] = "Game added successfully! Cache cleared.";
         }
     } catch (PDOException $e) {
         $_SESSION['error'] = "Error adding game: " . $e->getMessage();
@@ -475,6 +491,107 @@ if (isset($_POST['update_user_info'])) {
     exit;
 }
 
+// Handle transaction approval
+if (isset($_POST['approve_transaction'])) {
+    $transId = $_POST['transaction_id'];
+    
+    // Get transaction details
+    $stmt = $pdo->prepare("SELECT * FROM transactions WHERE id = ? AND status = 'pending'");
+    $stmt->execute([$transId]);
+    $transaction = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($transaction) {
+        $userId = $transaction['user_id'];
+        $amount = $transaction['amount'];
+        $type = $transaction['type'];
+        
+        try {
+            $pdo->beginTransaction();
+            
+            // Get current balance
+            $stmt = $pdo->prepare("SELECT balance FROM users WHERE id = ?");
+            $stmt->execute([$userId]);
+            $currentBalance = $stmt->fetchColumn();
+            
+            // Update balance based on transaction type
+            if ($type === 'deposit') {
+                $newBalance = $currentBalance + $amount;
+            } elseif ($type === 'withdrawal') {
+                $newBalance = $currentBalance - $amount;
+                
+                // Check if user has sufficient balance
+                if ($newBalance < 0) {
+                    throw new Exception('Insufficient balance for withdrawal');
+                }
+            } else {
+                throw new Exception('Invalid transaction type');
+            }
+            
+            // Update user balance
+            $stmt = $pdo->prepare("UPDATE users SET balance = ? WHERE id = ?");
+            $stmt->execute([$newBalance, $userId]);
+            
+            // Update transaction status and balance fields
+            $stmt = $pdo->prepare("
+                UPDATE transactions 
+                SET status = 'completed',
+                    balance_before = ?,
+                    balance_after = ?
+                WHERE id = ?
+            ");
+            $stmt->execute([$currentBalance, $newBalance, $transId]);
+            
+            // Commit transaction
+            $pdo->commit();
+            
+            // Write-through cache update
+            $cache = RedisCache::getInstance();
+            $cache->refreshBalance($userId, $newBalance);
+            $cache->invalidateUserCache($userId);
+            
+            $_SESSION['success'] = ucfirst($type) . " approved! User balance updated to " . formatCurrency($newBalance);
+            
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            $_SESSION['error'] = "Error approving transaction: " . $e->getMessage();
+        }
+    } else {
+        $_SESSION['error'] = "Transaction not found or already processed";
+    }
+    
+    header("Location: admin.php");
+    exit;
+}
+
+// Handle transaction rejection
+if (isset($_POST['reject_transaction'])) {
+    $transId = $_POST['transaction_id'];
+    $reason = $_POST['rejection_reason'] ?? 'Rejected by admin';
+    
+    // Get transaction details
+    $stmt = $pdo->prepare("SELECT * FROM transactions WHERE id = ? AND status = 'pending'");
+    $stmt->execute([$transId]);
+    $transaction = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($transaction) {
+        // Update transaction status
+        $stmt = $pdo->prepare("
+            UPDATE transactions 
+            SET status = 'failed',
+                description = CONCAT(description, ' - Rejected: ', ?)
+            WHERE id = ?
+        ");
+        $stmt->execute([$reason, $transId]);
+        
+        $_SESSION['success'] = "Transaction rejected successfully";
+    } else {
+        $_SESSION['error'] = "Transaction not found or already processed";
+    }
+    
+    header("Location: admin.php");
+    exit;
+}
+
 // Handle settings update
 if (isset($_POST['update_settings'])) {
     $settingsToUpdate = [
@@ -519,29 +636,71 @@ $totalGames = $pdo->query("SELECT COUNT(*) FROM games WHERE is_active = 1")->fet
 $totalBets = $pdo->query("SELECT COUNT(*) FROM transactions WHERE type = 'bet'")->fetchColumn();
 $totalRevenue = $pdo->query("SELECT SUM(amount) FROM transactions WHERE type = 'bet'")->fetchColumn() ?? 0;
 
+// Get pending wallet transactions
+$pendingTransactions = $pdo->query("
+    SELECT t.*, u.username, u.phone, u.balance as current_balance, u.currency
+    FROM transactions t
+    JOIN users u ON t.user_id = u.id
+    WHERE t.status = 'pending' AND t.type IN ('deposit', 'withdrawal')
+    ORDER BY t.created_at ASC
+")->fetchAll(PDO::FETCH_ASSOC);
+
+$pendingCount = count($pendingTransactions);
+
 // Handle AJAX request for loading more games
 if (isset($_GET['load_games'])) {
     $offset = isset($_GET['offset']) ? intval($_GET['offset']) : 0;
     $limit = 20;
+    $search = isset($_GET['search']) ? trim($_GET['search']) : '';
     
-    // Try cache first
-    $cacheKey = "admin:games:list:{$offset}:{$limit}";
-    $cachedGames = $cache->get($cacheKey);
-    
-    if ($cachedGames !== false) {
-        header('Content-Type: application/json');
-        echo json_encode($cachedGames);
-        exit;
+    // Build query based on search
+    if (!empty($search)) {
+        // Search query - check cache
+        $cacheKey = "admin:games:search:" . md5($search . $offset . $limit);
+        $cachedGames = $cache->get($cacheKey);
+        
+        if ($cachedGames !== false) {
+            header('Content-Type: application/json');
+            echo json_encode($cachedGames);
+            exit;
+        }
+        
+        // Search by game_uid or name
+        $stmt = $pdo->prepare("
+            SELECT * FROM games 
+            WHERE game_uid LIKE ? OR name LIKE ?
+            ORDER BY 
+                CASE WHEN game_uid = ? THEN 0 ELSE 1 END,
+                CASE WHEN name LIKE ? THEN 0 ELSE 1 END,
+                name ASC
+            LIMIT ? OFFSET ?
+        ");
+        $searchParam = '%' . $search . '%';
+        $stmt->execute([$searchParam, $searchParam, $search, $search . '%', $limit, $offset]);
+        $games = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Cache search results for 2 minutes
+        $cache->set($cacheKey, $games, 120);
+    } else {
+        // Regular load - try cache first
+        $cacheKey = "admin:games:list:{$offset}:{$limit}";
+        $cachedGames = $cache->get($cacheKey);
+        
+        if ($cachedGames !== false) {
+            header('Content-Type: application/json');
+            echo json_encode($cachedGames);
+            exit;
+        }
+        
+        $stmt = $pdo->prepare("SELECT * FROM games ORDER BY sort_order ASC, name ASC LIMIT ? OFFSET ?");
+        $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+        $stmt->bindValue(2, $offset, PDO::PARAM_INT);
+        $stmt->execute();
+        $games = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Cache for 5 minutes (admins need fresher data)
+        $cache->set($cacheKey, $games, RedisCache::CACHE_5_MINUTES);
     }
-    
-    $stmt = $pdo->prepare("SELECT * FROM games ORDER BY sort_order ASC, name ASC LIMIT ? OFFSET ?");
-    $stmt->bindValue(1, $limit, PDO::PARAM_INT);
-    $stmt->bindValue(2, $offset, PDO::PARAM_INT);
-    $stmt->execute();
-    $games = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // Cache for 5 minutes (admins need fresher data)
-    $cache->set($cacheKey, $games, RedisCache::CACHE_5_MINUTES);
     
     header('Content-Type: application/json');
     echo json_encode($games);
@@ -1035,9 +1194,85 @@ $transactions = $pdo->query("
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        
+        /* Game Preview Modal */
+        .game-preview-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .game-preview-modal.active {
+            display: flex;
+        }
+        .game-preview-container {
+            background: #1a1f36;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 1200px;
+            height: 85vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }
+        .game-preview-header {
+            background: #2d3548;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #374151;
+        }
+        .game-preview-header h3 {
+            margin: 0;
+            color: #ffffff;
+            font-size: 18px;
+        }
+        .close-preview {
+            background: #ef4444;
+            border: none;
+            color: white;
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            font-size: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+        .close-preview:hover {
+            background: #dc2626;
+        }
+        .game-preview-iframe {
+            flex: 1;
+            border: none;
+            width: 100%;
+            background: #0f172a;
+        }
     </style>
 </head>
 <body>
+    <!-- Game Preview Modal -->
+    <div class="game-preview-modal" id="gamePreviewModal" onclick="closeGamePreview(event)">
+        <div class="game-preview-container" onclick="event.stopPropagation()">
+            <div class="game-preview-header">
+                <h3 id="previewGameName">Game Preview</h3>
+                <button class="close-preview" onclick="closeGamePreview()">✕</button>
+            </div>
+            <iframe class="game-preview-iframe" id="gamePreviewIframe" src="about:blank"></iframe>
+        </div>
+    </div>
+
     <div class="header">
         <h1>Admin Dashboard</h1>
         <div>
@@ -1081,6 +1316,12 @@ $transactions = $pdo->query("
 
         <div class="tabs">
             <button class="tab active" onclick="switchTab('games')">🎮 Games</button>
+            <button class="tab" onclick="switchTab('wallet')" <?php if ($pendingCount > 0): ?>style="position: relative;"<?php endif; ?>>
+                💳 Wallet
+                <?php if ($pendingCount > 0): ?>
+                    <span style="position: absolute; top: -5px; right: -5px; background: #ef4444; color: white; border-radius: 10px; padding: 2px 6px; font-size: 11px; font-weight: bold;"><?php echo $pendingCount; ?></span>
+                <?php endif; ?>
+            </button>
             <button class="tab" onclick="switchTab('users')">👥 Users</button>
             <button class="tab" onclick="switchTab('history')">📊 Betting History</button>
             <button class="tab" onclick="switchTab('topplayers')">🏆 Top Players</button>
@@ -1090,9 +1331,27 @@ $transactions = $pdo->query("
 
         <!-- Games Tab -->
         <div id="games-tab" class="tab-content active">
-            <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
-                <button class="btn" onclick="showModal('addGameModal')">➕ Add New Game</button>
+            <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn" onclick="showModal('addGameModal')">➕ Add New Game</button>
+                    <button class="btn" onclick="if(confirm('Clear all game caches? This will refresh game data.')) window.location.href='admin.php?clear_cache=1'" style="background: #f59e0b;">🔄 Clear Cache</button>
+                </div>
                 <span style="color: #9ca3af;" id="games-counter">Showing <span id="loaded-count"><?php echo count($games); ?></span> of <?php echo $totalGamesCount; ?> games</span>
+            </div>
+            
+            <!-- Search Box -->
+            <div style="margin-bottom: 20px; position: relative; max-width: 500px;">
+                <input 
+                    type="text" 
+                    id="admin-game-search" 
+                    placeholder="🔍 Search by Game ID or Name..." 
+                    style="width: 100%; padding: 12px 45px 12px 15px; border: 2px solid #374151; border-radius: 10px; background: #1f2937; color: white; font-size: 15px;"
+                />
+                <button 
+                    id="clear-admin-search" 
+                    onclick="clearAdminSearch()" 
+                    style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #9ca3af; font-size: 20px; cursor: pointer; display: none; padding: 5px 10px;"
+                >✕</button>
             </div>
 
             <div class="game-grid" id="game-grid">
@@ -1114,6 +1373,9 @@ $transactions = $pdo->query("
                                 <strong>Status:</strong> <?php echo $game['is_active'] ? '✅ Active' : '❌ Inactive'; ?>
                             </div>
                             <div class="game-actions">
+                                <button class="btn btn-small" 
+                                        onclick="previewGame('<?php echo htmlspecialchars($game['game_uid'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($game['name'], ENT_QUOTES); ?>')"
+                                        style="background: #10b981;">🎮 Test</button>
                                 <button class="btn btn-small" onclick="editGame(<?php echo htmlspecialchars(json_encode($game)); ?>)">✏️ Edit</button>
                                 <a href="?delete=<?php echo $game['id']; ?>" class="btn btn-small btn-danger" onclick="return confirm('Delete this game?')">🗑️ Delete</a>
                             </div>
@@ -1133,10 +1395,125 @@ $transactions = $pdo->query("
         let gamesOffset = <?php echo count($games); ?>;
         let totalGames = <?php echo $totalGamesCount; ?>;
         let isLoading = false;
+        let adminSearchQuery = '';
+        let searchTimeout = null;
+        
+        // Setup admin search
+        document.addEventListener('DOMContentLoaded', function() {
+            const searchInput = document.getElementById('admin-game-search');
+            const clearBtn = document.getElementById('clear-admin-search');
+            
+            if (searchInput && clearBtn) {
+                searchInput.addEventListener('input', function(e) {
+                    const query = e.target.value.trim();
+                    
+                    // Show/hide clear button
+                    if (query) {
+                        clearBtn.style.display = 'block';
+                    } else {
+                        clearBtn.style.display = 'none';
+                    }
+                    
+                    // Debounce search
+                    clearTimeout(searchTimeout);
+                    searchTimeout = setTimeout(function() {
+                        adminSearchQuery = query;
+                        performAdminSearch();
+                    }, 300);
+                });
+                
+                // Clear on Escape
+                searchInput.addEventListener('keydown', function(e) {
+                    if (e.key === 'Escape') {
+                        clearAdminSearch();
+                    }
+                });
+            }
+        });
+        
+        function performAdminSearch() {
+            if (!adminSearchQuery) {
+                reloadAllGames();
+                return;
+            }
+            
+            isLoading = true;
+            document.getElementById('loading-indicator').classList.add('active');
+            document.getElementById('games-counter').innerHTML = 'Searching...';
+            
+            fetch('?load_games=1&search=' + encodeURIComponent(adminSearchQuery) + '&offset=0')
+                .then(response => response.json())
+                .then(games => {
+                    const gameGrid = document.getElementById('game-grid');
+                    gameGrid.innerHTML = '';
+                    
+                    if (games.length > 0) {
+                        games.forEach(game => {
+                            const gameCard = createGameCard(game);
+                            gameGrid.insertAdjacentHTML('beforeend', gameCard);
+                        });
+                        document.getElementById('games-counter').innerHTML = 
+                            '<span id=\"loaded-count\">' + games.length + '</span> game(s) found';
+                    } else {
+                        gameGrid.innerHTML = '<div style=\"grid-column: 1/-1; text-align: center; padding: 40px; color: #9ca3af;\">No games found</div>';
+                        document.getElementById('games-counter').innerHTML = '0 games found';
+                    }
+                    
+                    gamesOffset = games.length;
+                    isLoading = false;
+                    document.getElementById('loading-indicator').classList.remove('active');
+                })
+                .catch(error => {
+                    console.error('Search error:', error);
+                    isLoading = false;
+                    document.getElementById('loading-indicator').classList.remove('active');
+                });
+        }
+        
+        function clearAdminSearch() {
+            adminSearchQuery = '';
+            const searchInput = document.getElementById('admin-game-search');
+            const clearBtn = document.getElementById('clear-admin-search');
+            
+            if (searchInput) searchInput.value = '';
+            if (clearBtn) clearBtn.style.display = 'none';
+            
+            reloadAllGames();
+        }
+        
+        function reloadAllGames() {
+            isLoading = true;
+            document.getElementById('loading-indicator').classList.add('active');
+            
+            fetch('?load_games=1&offset=0')
+                .then(response => response.json())
+                .then(games => {
+                    const gameGrid = document.getElementById('game-grid');
+                    gameGrid.innerHTML = '';
+                    
+                    games.forEach(game => {
+                        const gameCard = createGameCard(game);
+                        gameGrid.insertAdjacentHTML('beforeend', gameCard);
+                    });
+                    
+                    gamesOffset = games.length;
+                    document.getElementById('loaded-count').textContent = gamesOffset;
+                    document.getElementById('games-counter').innerHTML = 
+                        'Showing <span id=\"loaded-count\">' + gamesOffset + '</span> of ' + totalGames + ' games';
+                    
+                    isLoading = false;
+                    document.getElementById('loading-indicator').classList.remove('active');
+                })
+                .catch(error => {
+                    console.error('Error reloading games:', error);
+                    isLoading = false;
+                    document.getElementById('loading-indicator').classList.remove('active');
+                });
+        }
         
         // Infinite scroll for games
         window.addEventListener('scroll', function() {
-            if (document.getElementById('games-tab').classList.contains('active') && !isLoading && gamesOffset < totalGames) {
+            if (document.getElementById('games-tab').classList.contains('active') && !isLoading && !adminSearchQuery && gamesOffset < totalGames) {
                 const scrollPosition = window.innerHeight + window.scrollY;
                 const pageHeight = document.documentElement.scrollHeight;
                 
@@ -1200,6 +1577,9 @@ $transactions = $pdo->query("
                             <strong>Status:</strong> ${statusText}
                         </div>
                         <div class="game-actions">
+                            <button class="btn btn-small" 
+                                    onclick="previewGame('${escapeHtml(game.game_uid)}', '${escapeHtml(game.name)}')"
+                                    style="background: #10b981;">🎮 Test</button>
                             <button class="btn btn-small" onclick='editGame(${JSON.stringify(game)})'>✏️ Edit</button>
                             <a href="?delete=${game.id}" class="btn btn-small btn-danger" onclick="return confirm('Delete this game?')">🗑️ Delete</a>
                         </div>
@@ -1213,7 +1593,125 @@ $transactions = $pdo->query("
             div.textContent = text;
             return div.innerHTML;
         }
+        
+        // Game Preview Functions
+        function previewGame(gameId, gameName) {
+            const modal = document.getElementById('gamePreviewModal');
+            const iframe = document.getElementById('gamePreviewIframe');
+            const nameEl = document.getElementById('previewGameName');
+            
+            nameEl.textContent = '🎮 ' + gameName;
+            iframe.src = 'play_game.php?game_id=' + encodeURIComponent(gameId) + '&game_name=' + encodeURIComponent(gameName);
+            modal.classList.add('active');
+            
+            // Prevent body scroll
+            document.body.style.overflow = 'hidden';
+        }
+        
+        function closeGamePreview(event) {
+            // Only close if clicking the background or close button
+            if (!event || event.target.id === 'gamePreviewModal' || event.currentTarget === event.target) {
+                const modal = document.getElementById('gamePreviewModal');
+                const iframe = document.getElementById('gamePreviewIframe');
+                
+                modal.classList.remove('active');
+                iframe.src = 'about:blank'; // Stop the game
+                
+                // Restore body scroll
+                document.body.style.overflow = '';
+            }
+        }
+        
+        // Close on Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                const modal = document.getElementById('gamePreviewModal');
+                if (modal.classList.contains('active')) {
+                    closeGamePreview();
+                }
+            }
+        });
         </script>
+
+        <!-- Wallet Transactions Tab -->
+        <div id="wallet-tab" class="tab-content">
+            <div class="table-container">
+                <h2 style="margin-bottom: 20px;">💳 Pending Wallet Transactions</h2>
+                
+                <?php if (empty($pendingTransactions)): ?>
+                    <div style="text-align: center; padding: 60px 20px; color: #64748b;">
+                        <div style="font-size: 64px; margin-bottom: 20px;">✅</div>
+                        <h3 style="margin-bottom: 10px;">No Pending Transactions</h3>
+                        <p>All deposit and withdrawal requests have been processed.</p>
+                    </div>
+                <?php else: ?>
+                    <div style="background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;">
+                        ⚠️ <?php echo $pendingCount; ?> transaction(s) awaiting your approval
+                    </div>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>User</th>
+                                <th>Phone</th>
+                                <th>Type</th>
+                                <th>Amount</th>
+                                <th>Current Balance</th>
+                                <th>New Balance</th>
+                                <th>Description</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($pendingTransactions as $trans): 
+                                $currency = $trans['currency'] ?? 'PHP';
+                                $isDeposit = $trans['type'] === 'deposit';
+                                $newBalance = $isDeposit 
+                                    ? $trans['current_balance'] + $trans['amount']
+                                    : $trans['current_balance'] - $trans['amount'];
+                                $hasEnoughBalance = $newBalance >= 0;
+                            ?>
+                                <tr style="<?php echo $hasEnoughBalance ? '' : 'background: #fee2e2;'; ?>">
+                                    <td><?php echo date('M d, Y H:i', strtotime($trans['created_at'])); ?></td>
+                                    <td><strong><?php echo htmlspecialchars($trans['username']); ?></strong></td>
+                                    <td><?php echo htmlspecialchars($trans['phone']); ?></td>
+                                    <td>
+                                        <span class="badge <?php echo $isDeposit ? 'badge-success' : 'badge-warning'; ?>">
+                                            <?php echo $isDeposit ? '📥 Deposit' : '📤 Withdrawal'; ?>
+                                        </span>
+                                    </td>
+                                    <td><strong><?php echo formatCurrency($trans['amount'], $currency); ?></strong></td>
+                                    <td><?php echo formatCurrency($trans['current_balance'], $currency); ?></td>
+                                    <td>
+                                        <strong style="color: <?php echo $hasEnoughBalance ? ($isDeposit ? '#10b981' : '#f59e0b') : '#ef4444'; ?>">
+                                            <?php echo formatCurrency($newBalance, $currency); ?>
+                                        </strong>
+                                        <?php if (!$hasEnoughBalance): ?>
+                                            <br><small style="color: #ef4444;">⚠️ Insufficient Balance</small>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td><?php echo htmlspecialchars($trans['description']); ?></td>
+                                    <td>
+                                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                            <form method="POST" style="margin: 0;" onsubmit="return confirm('Approve this <?php echo $trans['type']; ?>?');">
+                                                <input type="hidden" name="transaction_id" value="<?php echo $trans['id']; ?>">
+                                                <button type="submit" name="approve_transaction" class="btn btn-small" style="background: #10b981; <?php echo !$hasEnoughBalance ? 'opacity: 0.5; cursor: not-allowed;' : ''; ?>" <?php echo !$hasEnoughBalance ? 'disabled' : ''; ?>>
+                                                    ✅ Approve
+                                                </button>
+                                            </form>
+                                            <button class="btn btn-small btn-danger" onclick="showRejectModal(<?php echo $trans['id']; ?>, '<?php echo htmlspecialchars($trans['username'], ENT_QUOTES); ?>', '<?php echo $trans['type']; ?>')">
+                                                ❌ Reject
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            </div>
+        </div>
 
         <!-- Users Tab -->
         <div id="users-tab" class="tab-content">
@@ -1692,8 +2190,13 @@ $transactions = $pdo->query("
         <div class="modal-content">
             <span class="close" onclick="hideModal('editGameModal')">&times;</span>
             <h2>Edit Game</h2>
-            <form method="POST">
+            
+            <!-- Result Message -->
+            <div id="edit-game-result" style="display: none; padding: 12px; border-radius: 8px; margin-bottom: 20px;"></div>
+            
+            <form id="editGameForm" method="POST">
                 <input type="hidden" name="game_id" id="edit_game_id">
+                <input type="hidden" name="update_game" value="1">
                 <div class="form-group">
                     <label>Game UID</label>
                     <input type="text" id="edit_game_uid" disabled>
@@ -1724,7 +2227,7 @@ $transactions = $pdo->query("
                         <input type="checkbox" name="is_active" id="edit_is_active"> Active
                     </label>
                 </div>
-                <button type="submit" name="update_game" class="btn">Update Game</button>
+                <button type="submit" class="btn" id="updateGameBtn">Update Game</button>
             </form>
         </div>
     </div>
@@ -1969,8 +2472,61 @@ $transactions = $pdo->query("
             document.getElementById('edit_category').value = game.category;
             document.getElementById('edit_sort_order').value = game.sort_order;
             document.getElementById('edit_is_active').checked = game.is_active == 1;
+            
+            // Clear previous result message
+            document.getElementById('edit-game-result').style.display = 'none';
+            
             showModal('editGameModal');
         }
+        
+        // Handle edit game form submission via AJAX
+        document.getElementById('editGameForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const btn = document.getElementById('updateGameBtn');
+            const resultDiv = document.getElementById('edit-game-result');
+            
+            btn.disabled = true;
+            btn.textContent = 'Updating...';
+            resultDiv.style.display = 'none';
+            
+            fetch('admin.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.text())
+            .then(html => {
+                // Success - show message in modal
+                resultDiv.style.display = 'block';
+                resultDiv.style.background = '#d1fae5';
+                resultDiv.style.border = '1px solid #10b981';
+                resultDiv.style.color = '#065f46';
+                resultDiv.innerHTML = '✅ Game updated successfully! Cache cleared.';
+                
+                btn.disabled = false;
+                btn.textContent = 'Update Game';
+                
+                // Reload games list in background
+                reloadAllGames();
+                
+                // Hide success message after 3 seconds
+                setTimeout(() => {
+                    resultDiv.style.display = 'none';
+                }, 3000);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                resultDiv.style.display = 'block';
+                resultDiv.style.background = '#fee2e2';
+                resultDiv.style.border = '1px solid #ef4444';
+                resultDiv.style.color = '#991b1b';
+                resultDiv.innerHTML = '❌ Failed to update game';
+                
+                btn.disabled = false;
+                btn.textContent = 'Update Game';
+            });
+        });
         
         function uploadImage(gameId, gameName) {
             document.getElementById('upload_game_id').value = gameId;
@@ -2041,6 +2597,34 @@ $transactions = $pdo->query("
             if (event.target.className === 'modal') {
                 event.target.style.display = 'none';
             }
+        }
+        
+        // Wallet transaction functions
+        function showRejectModal(transactionId, username, type) {
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.style.display = 'block';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 500px;">
+                    <span class="close" onclick="this.closest('.modal').remove()">&times;</span>
+                    <h2 style="margin-bottom: 20px;">❌ Reject ${type.charAt(0).toUpperCase() + type.slice(1)}</h2>
+                    <form method="POST">
+                        <input type="hidden" name="transaction_id" value="${transactionId}">
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">User: <strong>${username}</strong></label>
+                        </div>
+                        <div style="margin-bottom: 20px;">
+                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Rejection Reason:</label>
+                            <textarea name="rejection_reason" rows="4" style="width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; font-family: inherit;" placeholder="Enter reason for rejection (optional)"></textarea>
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <button type="button" class="btn" onclick="this.closest('.modal').remove()" style="flex: 1; background: #64748b;">Cancel</button>
+                            <button type="submit" name="reject_transaction" class="btn btn-danger" style="flex: 1;">Reject Transaction</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+            document.body.appendChild(modal);
         }
     </script>
 </body>

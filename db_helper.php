@@ -128,23 +128,44 @@ class User {
         // Remove all non-numeric characters except +
         $phone = preg_replace('/[^0-9+]/', '', $phone);
         
-        // If starts with country code, return as is
-        if (strpos($phone, $countryCode) === 0) {
+        // If already has correct country code (+639), return as is
+        if (strpos($phone, '+639') === 0) {
             return $phone;
         }
         
-        // If starts with 0, remove it and add country code
+        // If starts with +63 but NOT +639 (e.g., +63972382805 missing the 9)
+        // This should stay as +63972382805, don't add extra 9
+        if (strpos($phone, '+63') === 0) {
+            return $phone; // Return as is, don't modify
+        }
+        
+        // Philippine format: 09XXXXXXXXX (11 digits)
+        // Example: 09972382805 -> +639972382805
+        if (strpos($phone, '09') === 0 && strlen($phone) === 11) {
+            // Remove "09", keep the rest, add "+639"
+            // 09972382805 -> 972382805 -> +639972382805
+            return '+639' . substr($phone, 2);
+        }
+        
+        // If starts with 0 and 10 digits total (e.g., 0972382805)
+        // Remove 0, add +639
+        if (strpos($phone, '0') === 0 && strlen($phone) === 10) {
+            return '+639' . substr($phone, 1);
+        }
+        
+        // If starts with 0 (other cases), remove it and add country code
         if (strpos($phone, '0') === 0) {
             return $countryCode . substr($phone, 1);
         }
         
-        // If just the number without prefix, add country code
-        if (strlen($phone) === 10) {
-            return $countryCode . $phone;
+        // If 9 digits starting with 9 (e.g., 972382805)
+        // Add +639
+        if (strlen($phone) === 9 && strpos($phone, '9') === 0) {
+            return '+639' . $phone;
         }
         
-        // Default: add country code
-        return $countryCode . $phone;
+        // Default: add country code +639
+        return '+639' . $phone;
     }
     
     /**

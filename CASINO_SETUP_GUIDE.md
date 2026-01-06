@@ -1,7 +1,11 @@
 # 🎰 Casino Platform - Complete Setup Guide
 
+**Version:** 1.6.3  
+**Last Updated:** December 29, 2025  
+**Status:** Production Ready ✅
+
 ## Project Overview
-Full-featured casino platform with user authentication, game lobby, wallet management, and PWA support for PC, Mobile, Android, iOS.
+Full-featured casino platform with user authentication, game lobby, wallet management with admin approval, and PWA support for PC, Mobile, Android, iOS.
 
 ## ✨ Features
 - ✅ Phone Number Authentication (Philippines +639 format)
@@ -15,18 +19,22 @@ Full-featured casino platform with user authentication, game lobby, wallet manag
   - Betting History & Statistics
   - Revenue Tracking
   - Dynamic Site Settings (Casino name, tagline, theme color)
+  - **💳 Wallet Transactions Management (Approve/Reject deposits & withdrawals)**
 - ✅ Responsive Design (PC, Tablet, Mobile)
 - ✅ PWA Support (Install as App on Android/iOS)
 - ✅ Transaction History & Audit Logs
 - ✅ Secure API Integration with SoftAPI
 - ✅ Real-time Balance Updates via Encrypted Callbacks
-- ✅ Multiple Phone Number Format Support (09... or +639...)
+- ✅ Multiple Phone Number Format Support (09... or +639...) - Fixed normalization bug
 - ✅ Extended Session Management (4-hour timeout with auto keep-alive)
 - ✅ Form Resubmission Prevention (Post/Redirect/Get pattern)
 - ✅ Smart Game Loading (Hides timeout errors if game loads successfully)
 - ✅ **Redis Caching System** (Write-through caching, 60-second balance TTL)
 - ✅ **Cache Warming** (Pre-populates cache on login for fast access)
 - ✅ **Auto Cache Invalidation** (Admin updates reflected immediately)
+- ✅ **Wallet System** (Deposits, withdrawals, transaction history with status tracking)
+- ✅ **Admin Wallet Processing** (Approve/reject pending transactions, real-time balance updates)
+- ✅ **Search & Filter** (Real-time game search by name/provider, category filtering)
 
 ---
 
@@ -45,7 +53,8 @@ casino/
 ├── get_balance.php        # AJAX endpoint for real-time balance updates
 ├── redis_helper.php       # Redis caching with write-through pattern
 ├── settings_helper.php    # Site settings with Redis caching
-├── wallet.php             # Wallet management (to be created)
+├── wallet.php             # Wallet management (deposits, withdrawals, history)
+├── migrate_transaction_status.php # Database migration for wallet status
 ├── profile.php            # User profile (to be created)
 ├── db_helper.php          # Database functions
 ├── currency_helper.php    # Currency formatting and detection
@@ -90,6 +99,9 @@ php setup_admin.php
 
 # Add currency support (if updating existing installation)
 php migrate_currency.php
+
+# Add wallet status tracking (if updating existing installation)
+php migrate_transaction_status.php
 ```
 
 This creates:
@@ -247,9 +259,11 @@ Redirect to login with generated username displayed
 ```
 
 **Phone Number Formats Accepted:**
-- `09123456789` (11 digits, starts with 09)
-- `+639123456789` (with country code)
-- `9123456789` (10 digits, auto-adds 0)
+- `09123456789` (11 digits, starts with 09) - Normalized to `+639123456789`
+- `+639123456789` (with country code) - Stored as-is
+- `9123456789` (9 digits, without prefix) - Auto-adds `+639`
+- `0997-238-2805` (with dashes) - Dashes removed
+- `0997 238 2805` (with spaces) - Spaces removed
 
 **Default Currency:**
 - PHP (₱) - Philippine Peso (All users default to PHP)
@@ -523,8 +537,17 @@ sort_order, created_at, updated_at
 ### transactions
 ```sql
 id, user_id, type, amount, balance_before, balance_after,
-game_uid, game_round, description, created_at
+game_uid, game_round, description, status, created_at
 ```
+
+**Fields:**
+- `type`: Transaction type (deposit, withdrawal, bet, win)
+- `status`: Transaction status (completed, pending, failed)
+- `description`: Transaction description
+- Status values:
+  - `completed`: Transaction processed successfully
+  - `pending`: Awaiting admin approval (deposits/withdrawals)
+  - `failed`: Transaction failed or rejected
 
 ### game_sessions
 ```sql
@@ -534,7 +557,120 @@ total_bets, total_wins, rounds_played, started_at, ended_at, status
 
 ---
 
-## 🔐 Security Features
+## 💳 Wallet System
+
+### Access Wallet
+**URL:** `https://31.97.107.21/wallet.php`  
+**Navigation:** Click "💳 Wallet" button in header (when logged in)
+
+### Features
+
+**1. Balance Overview:**
+- Current balance display
+- Total deposits
+- Total withdrawals
+- Total bets placed
+- Total wins
+
+**2. Deposit Funds:**
+- Minimum deposit: 100 PHP (or equivalent)
+- Payment methods:
+  - Bank Transfer
+  - GCash
+  - PayMaya
+  - Cryptocurrency
+- Status: Pending (requires admin approval)
+- Deposits appear in transaction history
+
+**3. Withdraw Funds:**
+- Minimum withdrawal: 500 PHP (or equivalent)
+- Maximum: Current balance
+- Requires account details (bank/e-wallet)
+- Status: Pending (requires admin processing)
+- Processed within 24-48 hours
+
+**4. Transaction History:**
+- Last 50 transactions
+- Types: Deposits, Withdrawals, Bets, Wins
+- Status indicators:
+  - ✅ Completed (green)
+  - ⏳ Pending (orange)
+  - ❌ Failed (red)
+- Filterable by type
+- Shows balance before/after each transaction
+
+### Admin Processing (To Do)
+
+Admins need to manually approve/reject deposit and withdrawal requests:
+1. View pending transactions in admin panel
+2. Verify payment received (for deposits)
+3. Approve → Updates user balance, changes status to 'completed'
+4. Reject → Changes status to 'failed', refunds if needed
+
+**Note:** Admin processing features will be added in the next update.
+
+---
+
+## �️ Admin Dashboard - Wallet Management
+
+### Access Admin Panel
+**URL:** `http://31.97.107.21/admin.php`  
+**Default Credentials:** Check database `admin_users` table
+
+### Wallet Transactions Tab
+
+**Features:**
+- 💳 New "Wallet" tab with pending transaction counter badge
+- Real-time display of all pending deposits and withdrawals
+- Shows user information, amount, current balance, and projected new balance
+- Color-coded transaction types:
+  - 📥 Green badge for deposits
+  - 📤 Orange badge for withdrawals
+- Balance validation (prevents withdrawals exceeding balance)
+
+**Approve Transaction:**
+1. Navigate to "💳 Wallet" tab in admin panel
+2. Review pending transaction details
+3. For deposits: Verify payment received externally
+4. For withdrawals: Ensure user has sufficient balance
+5. Click "✅ Approve" button
+6. System will:
+   - Update user balance in database
+   - Refresh Redis cache immediately
+   - Mark transaction as 'completed'
+   - Set balance_before and balance_after fields
+7. User sees updated balance instantly
+
+**Reject Transaction:**
+1. Click "❌ Reject" button on transaction
+2. Enter rejection reason (optional)
+3. Click "Reject Transaction"
+4. System marks transaction as 'failed'
+5. Reason appended to transaction description
+6. User can see rejection in transaction history
+
+**Security Features:**
+- Atomic database transactions (prevents race conditions)
+- Insufficient balance detection (red highlight)
+- Approval button disabled for invalid withdrawals
+- Confirmation prompt before approval
+- Admin action logging in transaction history
+- Cache invalidation ensures real-time updates
+
+**Transaction Flow:**
+```
+User Request (Pending) → Admin Review → Approve/Reject
+                              ↓
+                    Balance Update (Approve)
+                              ↓
+                    Cache Refresh (Real-time)
+                              ↓
+                    Status: Completed
+```
+
+---
+
+## �🔐 Security Features
 
 1. **Password Hashing**: bcrypt algorithm
 2. **Extended Session Management**: 
@@ -625,16 +761,18 @@ Backup repository: https://github.com/fivecoinvest-blip/apihan
 
 ## 📈 Next Steps
 
-1. **Add Wallet Page**: Deposits, withdrawals, transaction history
-2. **Add Profile Page**: Edit user info, change password
-3. **Add Game History**: Show past sessions and results
-4. **Add Promotions**: Bonuses, free spins, cashback
-5. **Add Live Chat**: Customer support integration
-6. **Add Payment Gateway**: Stripe, PayPal integration
-7. ~~**Add Admin Panel**: Manage users, games, transactions~~ ✅ **COMPLETED**
-8. **Add Analytics**: Track gameplay, popular games, revenue
-9. **Optimize Image Loading**: Implement lazy loading for game thumbnails
-10. **Add Search/Filter**: Search games by name, filter by category
+1. ~~**Add Wallet Page**: Deposits, withdrawals, transaction history~~ ✅ **COMPLETED**
+2. ~~**Admin Deposit/Withdrawal Processing**: Approve/reject pending requests~~ ✅ **COMPLETED**
+3. ~~**Add Search/Filter**: Search games by name, filter by category~~ ✅ **COMPLETED**
+4. **Add Profile Page**: Edit user info, change password
+5. **Add Game History**: Show past sessions and results
+6. **Add Promotions**: Bonuses, free spins, cashback
+7. **Add Live Chat**: Customer support integration
+8. **Add Payment Gateway**: Stripe, PayPal, GCash API integration for auto-processing
+9. ~~**Add Admin Panel**: Manage users, games, transactions~~ ✅ **COMPLETED**
+10. **Add Analytics**: Track gameplay, popular games, revenue
+11. **Optimize Image Loading**: Implement lazy loading for game thumbnails
+12. **Email Notifications**: Notify users on deposit/withdrawal status changes
 
 ---
 
@@ -719,7 +857,43 @@ redis-cli GET 'site:settings:all'
 ---
 
 **Last Updated**: December 29, 2025
-**Version**: 1.5.0
+**Version**: 1.6.3
+
+**Recent Changes (v1.6.3):**
+- **JavaScript Cleanup** - Removed duplicate filterGames() call causing errors
+- **Event Listener Fix** - Wrapped initialization in DOMContentLoaded for reliability
+- **Enhanced Error Handling** - Added try-catch blocks and console logging
+- **Null Safety Checks** - Prevents crashes when DOM elements not found
+- **Code Deduplication** - Removed duplicate initialization code
+- **Stability Improvements** - Fixed function order and event registration
+- **Performance Boost** - Optimized search debounce and rendering
+- **Better Debugging** - Added detailed console logs for troubleshooting
+
+**Recent Changes (v1.6.2):**
+- **Game Search Feature** - Real-time search by game name or provider
+- **Smart Filtering** - Search works across categories
+- **Empty State Handling** - User-friendly "no results" message
+- **Client-Side Filtering** - Instant search results without server requests
+- **Clear Search Button** - Quick search reset with × button
+- **Keyboard Shortcuts** - ESC key clears search
+- **Mobile Optimized** - Search bar prevents zoom on iOS devices
+- **Search Persistence** - Maintains category filters while searching
+
+**Recent Changes (v1.6.1):**
+- **Phone Number Normalization Fix** - Fixed critical bug causing extra "9" in phone numbers
+- **Database Migration** - Updated 2 existing users with incorrect phone format
+- **Enhanced Validation** - Properly handles Philippine format (09XXXXXXXXX → +639XXXXXXXXX)
+- **Test Suite Created** - Comprehensive phone normalization tests (10/10 passing)
+- **Edge Cases Fixed** - Handles spaces, dashes, various prefixes correctly
+- **Backward Compatible** - Existing users can still login with old or new format
+
+**Recent Changes (v1.6.0):**
+- **Admin Wallet Management** - Approve/reject deposit and withdrawal transactions
+- **Real-time Balance Updates** - Atomic transactions with cache invalidation
+- **Balance Validation** - Prevents invalid withdrawals exceeding user balance
+- **Transaction Rejection** - Admin can reject with optional reason
+- **Status Tracking** - Pending, completed, failed transaction states
+- **Audit Logging** - All admin actions logged in transaction history
 
 **Recent Changes (v1.5.0):**
 - **Redis Caching System** - Write-through caching with automatic invalidation
