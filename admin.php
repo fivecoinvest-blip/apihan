@@ -768,6 +768,7 @@ if (isset($_POST['add_banner'])) {
     $buttonText = trim($_POST['banner_button_text'] ?? 'Play Now');
     $link = trim($_POST['banner_link'] ?? '');
     $enabled = isset($_POST['banner_enabled']) ? 1 : 0;
+    $audience = in_array(($_POST['banner_audience'] ?? 'all'), ['all','logged_in','guest']) ? $_POST['banner_audience'] : 'all';
 
     $imagePath = '';
     if (isset($_FILES['banner_image']) && $_FILES['banner_image']['error'] === 0) {
@@ -784,18 +785,26 @@ if (isset($_POST['add_banner'])) {
         'button_text' => $buttonText,
         'link' => $link,
         'enabled' => $enabled,
+        'audience' => $audience,
         'image' => $imagePath,
         'created_at' => date('c')
     ];
 
     SiteSettings::set('banners', json_encode($banners));
+    if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+        ob_clean();
+        header('Content-Type: application/json');
+        echo json_encode(['success' => true, 'banners' => $banners]);
+        exit;
+    }
     $_SESSION['success'] = "Banner added successfully!";
-    header('Location: admin.php#settings-tab');
+    header('Location: admin.php#tool-tab');
     exit;
 }
 
 // Handle banner update
 if (isset($_POST['update_banner'])) {
+    $isAjax = !empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
     $index = intval($_POST['banner_index'] ?? -1);
     $bannersJson = SiteSettings::get('banners', '[]');
     $banners = json_decode($bannersJson, true);
@@ -807,6 +816,7 @@ if (isset($_POST['update_banner'])) {
         $banners[$index]['button_text'] = trim($_POST['banner_button_text'] ?? 'Play Now');
         $banners[$index]['link'] = trim($_POST['banner_link'] ?? '');
         $banners[$index]['enabled'] = isset($_POST['banner_enabled']) ? 1 : 0;
+        $banners[$index]['audience'] = in_array(($_POST['banner_audience'] ?? 'all'), ['all','logged_in','guest']) ? $_POST['banner_audience'] : 'all';
 
         if (isset($_FILES['banner_image']) && $_FILES['banner_image']['error'] === 0) {
             $bannerDir = 'uploads/banners/';
@@ -816,16 +826,29 @@ if (isset($_POST['update_banner'])) {
         }
 
         SiteSettings::set('banners', json_encode($banners));
+        if ($isAjax) {
+            ob_clean();
+            header('Content-Type: application/json');
+            echo json_encode(['success' => true, 'banners' => $banners]);
+            exit;
+        }
         $_SESSION['success'] = "Banner updated successfully!";
     } else {
+        if ($isAjax) {
+            ob_clean();
+            header('Content-Type: application/json');
+            echo json_encode(['success' => false, 'error' => 'Banner index ' . $index . ' out of range (' . count($banners) . ' banners)']);
+            exit;
+        }
         $_SESSION['error'] = "Banner not found";
     }
-    header('Location: admin.php#settings-tab');
+    header('Location: admin.php#tool-tab');
     exit;
 }
 
 // Handle banner delete
 if (isset($_POST['delete_banner'])) {
+    $isAjax = !empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
     $index = intval($_POST['banner_index'] ?? -1);
     $bannersJson = SiteSettings::get('banners', '[]');
     $banners = json_decode($bannersJson, true);
@@ -834,11 +857,23 @@ if (isset($_POST['delete_banner'])) {
     if ($index >= 0 && $index < count($banners)) {
         array_splice($banners, $index, 1);
         SiteSettings::set('banners', json_encode($banners));
+        if ($isAjax) {
+            ob_clean();
+            header('Content-Type: application/json');
+            echo json_encode(['success' => true, 'banners' => $banners]);
+            exit;
+        }
         $_SESSION['success'] = "Banner deleted";
     } else {
+        if ($isAjax) {
+            ob_clean();
+            header('Content-Type: application/json');
+            echo json_encode(['success' => false, 'error' => 'Banner index ' . $index . ' out of range (' . count($banners) . ' banners)']);
+            exit;
+        }
         $_SESSION['error'] = "Banner not found";
     }
-    header('Location: admin.php#settings-tab');
+    header('Location: admin.php#tool-tab');
     exit;
 }
 
@@ -928,6 +963,17 @@ $recentFailed = $pdo->query("
     ORDER BY t.created_at DESC
     LIMIT 50
 ")->fetchAll(PDO::FETCH_ASSOC);
+
+// Lightweight JSON endpoint for wallet auto-refresh
+if (isset($_GET['wallet_json'])) {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'pendingCount' => $pendingCount,
+        'recentApproved' => $recentApproved,
+        'recentFailed' => $recentFailed,
+    ]);
+    exit;
+}
 
 // Ensure bonus tables exist
 $pdo->exec("CREATE TABLE IF NOT EXISTS bonus_programs (
@@ -1117,6 +1163,9 @@ $transactions = $pdo->query("
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
+    <!-- AdminLTE + Bootstrap (CDN) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@4/dist/css/adminlte.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
@@ -1195,6 +1244,9 @@ $transactions = $pdo->query("
             padding: 4px;
             margin-bottom: 24px;
             overflow-x: auto;
+            position: sticky;
+            top: 0;
+            z-index: 999;
         }
         .tab { 
             padding: 10px 20px; 
@@ -1397,6 +1449,30 @@ $transactions = $pdo->query("
         }
         .form-group input[type="checkbox"] { width: auto; }
         .form-group small { color: #9ca3af; font-size: 13px; }
+        /* Toasts */
+        .toast-container {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .toast {
+            background: #1f2937;
+            color: #e5e7eb;
+            border: 1px solid #374151;
+            padding: 10px 14px;
+            border-radius: 8px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+            opacity: 0;
+            transform: translateY(-6px);
+            transition: all 0.25s ease;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.success { border-color: #10b981; }
+        .toast.error { border-color: #ef4444; }
         .payment-methods-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1619,7 +1695,7 @@ $transactions = $pdo->query("
         }
     </style>
 </head>
-<body>
+<body class="hold-transition layout-navbar-fixed">
     <!-- Game Preview Modal -->
     <div class="game-preview-modal" id="gamePreviewModal" onclick="closeGamePreview(event)">
         <div class="game-preview-container" onclick="event.stopPropagation()">
@@ -1631,7 +1707,8 @@ $transactions = $pdo->query("
         </div>
     </div>
 
-    <div class="header">
+    <div class="toast-container" id="toast-container"></div>
+    <div class="header navbar navbar-expand navbar-dark" style="background:#1a1f36;border-bottom:1px solid #2d3548;">
         <h1>Admin Dashboard</h1>
         <div>
             <span style="margin-right: 20px;"><?php echo htmlspecialchars($_SESSION['admin_username']); ?></span>
@@ -1698,6 +1775,14 @@ $transactions = $pdo->query("
                                 <label>Link (URL)</label>
                                 <input type="url" name="banner_link" placeholder="https://your-campaign-url.com">
                             </div>
+                            <div>
+                                <label>Audience</label>
+                                <select name="banner_audience">
+                                    <option value="all">All users</option>
+                                    <option value="logged_in">Logged-in only</option>
+                                    <option value="guest">Guest only</option>
+                                </select>
+                            </div>
                             <div style="display:flex;align-items:center;gap:8px;">
                                 <input type="checkbox" name="banner_enabled" value="1" checked>
                                 <span>Enabled</span>
@@ -1743,6 +1828,15 @@ $transactions = $pdo->query("
                                         <input type="checkbox" name="banner_enabled" value="1" <?php echo !empty($bn['enabled']) ? 'checked' : ''; ?>>
                                         <span>Enabled</span>
                                     </div>
+                                    <div>
+                                        <label>Audience</label>
+                                        <select name="banner_audience">
+                                            <?php $aud = $bn['audience'] ?? 'all'; ?>
+                                            <option value="all" <?php echo $aud==='all'?'selected':''; ?>>All users</option>
+                                            <option value="logged_in" <?php echo $aud==='logged_in'?'selected':''; ?>>Logged-in only</option>
+                                            <option value="guest" <?php echo $aud==='guest'?'selected':''; ?>>Guest only</option>
+                                        </select>
+                                    </div>
                                 </div>
                                 <div>
                                     <label>Subtitle</label>
@@ -1750,8 +1844,8 @@ $transactions = $pdo->query("
                                 </div>
                                 <div>
                                     <label>Current Image</label>
-                                    <?php if (!empty($bn['image']) && (filter_var($bn['image'], FILTER_VALIDATE_URL) || file_exists($bn['image']))): ?>
-                                        <img src="<?php echo htmlspecialchars($bn['image']); ?>" style="max-width: 100%; border-radius: 10px; border: 1px solid #2d3548; background: #0f1626; padding: 6px;">
+                                        <?php if (!empty($bn['image']) && (filter_var($bn['image'], FILTER_VALIDATE_URL) || file_exists($bn['image']))): ?>
+                                            <img src="<?php echo htmlspecialchars($bn['image']); ?>" style="width: 220px; height: 140px; object-fit: cover; border-radius: 10px; border: 1px solid #2d3548; background: #0f1626;">
                                     <?php else: ?>
                                         <div style="color:#9ca3af;">No image</div>
                                     <?php endif; ?>
@@ -1770,21 +1864,21 @@ $transactions = $pdo->query("
                 </div>
             </div>
         </div>
-        <div class="tabs">
-            <button class="tab active" onclick="switchTab('games')">🎮 Games</button>
-            <button class="tab" onclick="switchTab('wallet')" <?php if ($pendingCount > 0): ?>style="position: relative;"<?php endif; ?>>
+        <div class="tabs nav nav-pills mb-3" role="tablist">
+            <button class="tab nav-link active" role="tab" onclick="switchTab('games', this)">🎮 Games</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('wallet', this)" <?php if ($pendingCount > 0): ?>style="position: relative;"<?php endif; ?>>
                 💳 Wallet
                 <?php if ($pendingCount > 0): ?>
-                    <span style="position: absolute; top: -5px; right: -5px; background: #ef4444; color: white; border-radius: 10px; padding: 2px 6px; font-size: 11px; font-weight: bold;"><?php echo $pendingCount; ?></span>
+                    <span id="pendingBadge" style="position: absolute; top: -5px; right: -5px; background: #ef4444; color: white; border-radius: 10px; padding: 2px 6px; font-size: 11px; font-weight: bold;"><?php echo $pendingCount; ?></span>
                 <?php endif; ?>
             </button>
-            <button class="tab" onclick="switchTab('bonuses')">🎁 Bonuses</button>
-            <button class="tab" onclick="switchTab('users')">👥 Users</button>
-            <button class="tab" onclick="switchTab('history')">📊 Betting History</button>
-            <button class="tab" onclick="switchTab('topplayers')">🏆 Top Players</button>
-            <button class="tab" onclick="switchTab('mostplayed')">🎯 Most Bets Games</button>
-            <button class="tab" onclick="switchTab('tool')">🛠️ Tool</button>
-            <button class="tab" onclick="switchTab('settings')">⚙️ Settings</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('bonuses', this)">🎁 Bonuses</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('users', this)">👥 Users</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('history', this)">📊 Betting History</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('topplayers', this)">🏆 Top Players</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('mostplayed', this)">🎯 Most Bets Games</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('tool', this)">🛠️ Tool</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('settings', this)">⚙️ Settings</button>
         </div>
 
         <!-- Games Tab -->
@@ -2183,7 +2277,7 @@ $transactions = $pdo->query("
                             <th>Description</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="recentApprovedBody">
                         <?php foreach ($recentApproved as $tx): $currency = $tx['currency'] ?? 'PHP'; ?>
                             <tr>
                                 <td><?php echo date('M d, Y H:i', strtotime($tx['created_at'])); ?></td>
@@ -2215,7 +2309,7 @@ $transactions = $pdo->query("
                             <th>Description</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="recentFailedBody">
                         <?php foreach ($recentFailed as $tx): $currency = $tx['currency'] ?? 'PHP'; ?>
                             <tr>
                                 <td><?php echo date('M d, Y H:i', strtotime($tx['created_at'])); ?></td>
@@ -3056,6 +3150,16 @@ $transactions = $pdo->query("
                 // Remove the success parameter from URL
                 window.history.replaceState({}, document.title, window.location.pathname);
             }
+            // Server-side toasts for non-AJAX actions
+            <?php
+                $serverSuccess = $_SESSION['success'] ?? null;
+                $serverError = $_SESSION['error'] ?? null;
+                unset($_SESSION['success'], $_SESSION['error']);
+            ?>
+            const serverSuccess = <?php echo json_encode($serverSuccess); ?>;
+            const serverError = <?php echo json_encode($serverError); ?>;
+            if (serverSuccess) { showToast(serverSuccess, 'success'); }
+            if (serverError) { showToast(serverError, 'error'); }
             
             // Auto-upload on file selection
             const fileInput = document.getElementById('game_image_input');
@@ -3071,6 +3175,12 @@ $transactions = $pdo->query("
                     }
                 });
             }
+            // Initialize Tool tab autosave
+            bindToolAutoSave();
+            // Start wallet auto refresh every 10s
+            setInterval(walletAutoRefresh, 10000);
+            // Run once on load
+            walletAutoRefresh();
         });
         
         function showModal(id) {
@@ -3081,16 +3191,193 @@ $transactions = $pdo->query("
             document.getElementById(id).style.display = 'none';
         }
         
-        function switchTab(tabName) {
+        function switchTab(tabName, el) {
             // Hide all tabs
             document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
             document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
             
             // Show selected tab
             document.getElementById(tabName + '-tab').classList.add('active');
-            event.target.classList.add('active');
+            if (el) { el.classList.add('active'); }
         }
         
+        function showToast(message, type='success'){
+            const cont = document.getElementById('toast-container');
+            if (!cont) return;
+            const el = document.createElement('div');
+            el.className = 'toast ' + (type==='error' ? 'error' : 'success');
+            el.textContent = message;
+            cont.appendChild(el);
+            requestAnimationFrame(()=> el.classList.add('show'));
+            setTimeout(()=>{
+                el.classList.remove('show');
+                setTimeout(()=> el.remove(), 200);
+            }, 3000);
+        }
+
+        function bindToolAutoSave(){
+            // Auto-upload and auto-save in Tool tab using AJAX
+            document.querySelectorAll('#tool-tab form').forEach(form => {
+                // Only bind autosave for existing banners (forms with banner_index)
+                const isExistingBanner = !!form.querySelector('input[name="banner_index"]');
+                if (!isExistingBanner) {
+                    return; // Skip the Add New Banner form
+                }
+                form.addEventListener('submit', function(ev){
+                    // Prevent infinite loop from requestSubmit() retriggering
+                    if (form.dataset.ajaxSubmitting === '1') return;
+                    
+                    // Intercept submit; send AJAX
+                    ev.preventDefault();
+                    const fd = new FormData(form);
+                    // Ensure the server receives which action was intended (add/update/delete)
+                    let submitName = '';
+                    if (ev.submitter && ev.submitter.name) {
+                        submitName = ev.submitter.name;
+                    } else {
+                        // Infer default action when auto-submitting
+                        if (form.querySelector('input[name="banner_index"]')) {
+                            submitName = 'update_banner';
+                        } else if (form.querySelector('button[name="add_banner"]')) {
+                            submitName = 'add_banner';
+                        }
+                    }
+                    if (submitName) { fd.append(submitName, '1'); }
+                    form.dataset.ajaxSubmitting = '1';
+                    console.log('AJAX submit:', Array.from(fd.keys()));
+                    
+                    fetch('admin.php', {
+                        method: 'POST',
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                        body: fd
+                    }).then(r=> {
+                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                        return r.text();
+                    }).then(text=>{
+                        try {
+                            const data = JSON.parse(text);
+                            if (data && data.success){
+                                showToast('Saved successfully');
+                                // Update UI without full reload
+                                if (submitName === 'delete_banner') {
+                                    form.remove();
+                                    return;
+                                }
+                                if (submitName === 'update_banner') {
+                                    const idxInput = form.querySelector('input[name="banner_index"]');
+                                    const idx = idxInput ? parseInt(idxInput.value, 10) : -1;
+                                    if (!isNaN(idx) && data.banners && data.banners[idx]){
+                                        const imgPath = data.banners[idx].image || '';
+                                        if (imgPath){
+                                            const previewImg = form.querySelector('img');
+                                            const noImg = form.querySelector('div[style*="No image"]');
+                                            if (previewImg){
+                                                previewImg.src = imgPath + (imgPath.includes('?') ? '&' : '?') + 't=' + Date.now();
+                                            } else {
+                                                if (noImg && noImg.parentElement){
+                                                    const img = document.createElement('img');
+                                                    img.src = imgPath;
+                                                    img.style.width = '220px';
+                                                    img.style.height = '140px';
+                                                    img.style.objectFit = 'cover';
+                                                    img.style.borderRadius = '10px';
+                                                    img.style.border = '1px solid #2d3548';
+                                                    img.style.background = '#0f1626';
+                                                    noImg.parentElement.replaceChild(img, noImg);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if (submitName === 'add_banner') {
+                                    // Clear the add form fields
+                                    try { form.reset(); } catch (e) {}
+                                }
+                            } else {
+                                showToast(data && data.error ? data.error : 'Save failed', 'error');
+                            }
+                        } catch(e) {
+                            showToast('Invalid response from server', 'error');
+                                                        console.error('Parse error:', e, 'Response:', text.substring(0,500));
+                        }
+                                        }).catch(err=> showToast('Network error: ' + err.message, 'error'))
+                                            .finally(()=> form.dataset.ajaxSubmitting = '0');
+                });
+                // Auto submit on file change
+                form.querySelectorAll('input[type="file"]').forEach(inp => {
+                    inp.addEventListener('change', () => form.requestSubmit());
+                });
+                // Auto save on input changes (debounced)
+                let t;
+                form.querySelectorAll('input[type="text"], input[type="url"], textarea, select, input[type="checkbox"]').forEach(inp => {
+                    inp.addEventListener('change', ()=>{
+                        clearTimeout(t);
+                        t = setTimeout(()=> form.requestSubmit(), 600);
+                    });
+                });
+            });
+        }
+
+        // Wallet auto-refresh: poll server and update tables/badge
+        function walletAutoRefresh(){
+            const approvedBody = document.getElementById('recentApprovedBody');
+            const failedBody = document.getElementById('recentFailedBody');
+            const walletTabBtn = Array.from(document.querySelectorAll('.tabs .tab')).find(b => b.getAttribute('onclick') && b.getAttribute('onclick').includes("wallet"));
+            fetch('admin.php?wallet_json=1', { headers: { 'X-Requested-With': 'XMLHttpRequest' }})
+              .then(r=>r.json())
+              .then(data=>{
+                if (!data) return;
+                // Update pending badge
+                if (walletTabBtn){
+                    let badge = walletTabBtn.querySelector('#pendingBadge');
+                    if (data.pendingCount > 0){
+                        if (!badge){
+                            badge = document.createElement('span');
+                            badge.id = 'pendingBadge';
+                            badge.style.position = 'absolute';
+                            badge.style.top = '-5px';
+                            badge.style.right = '-5px';
+                            badge.style.background = '#ef4444';
+                            badge.style.color = 'white';
+                            badge.style.borderRadius = '10px';
+                            badge.style.padding = '2px 6px';
+                            badge.style.fontSize = '11px';
+                            badge.style.fontWeight = 'bold';
+                            walletTabBtn.style.position = 'relative';
+                            walletTabBtn.appendChild(badge);
+                        }
+                        badge.textContent = data.pendingCount;
+                    } else if (badge) {
+                        badge.remove();
+                    }
+                }
+                // Render tables
+                function renderRows(rows, isApproved){
+                    return rows.map(tx => {
+                        const d = new Date(tx.created_at);
+                        const dateStr = d.toLocaleString();
+                        const typeBadge = isApproved ? (tx.type === 'deposit' ? '<span class="badge badge-success">📥 Deposit</span>' : '<span class="badge badge-warning">📤 Withdrawal</span>') : '<span class="badge badge-danger">❌ Rejected</span>';
+                        const amount = Number(tx.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                        const userCell = `<strong>${escapeHtml(tx.username || '')}</strong><br><small>${escapeHtml(tx.phone || '')}</small>`;
+                        return `<tr>
+                            <td>${dateStr}</td>
+                            <td>${userCell}</td>
+                            <td>${typeBadge}</td>
+                            <td><strong>${amount}</strong></td>
+                            <td>${escapeHtml(tx.description || '')}</td>
+                        </tr>`;
+                    }).join('');
+                }
+                if (approvedBody){ approvedBody.innerHTML = renderRows(data.recentApproved || [], true); }
+                if (failedBody){ failedBody.innerHTML = renderRows(data.recentFailed || [], false); }
+              }).catch(()=>{});
+        }
+
+        // Simple HTML escape for dynamic inserts
+        function escapeHtml(str){
+            return String(str).replace(/[&<>"]+/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s]));
+        }
+
         function editUser(user) {
             document.getElementById('edit_user_id').value = user.id;
             document.getElementById('edit_username').value = user.username;
@@ -3474,9 +3761,12 @@ $transactions = $pdo->query("
             
             showModal('editBonusModal');
         }
-    </script>
-</body>
-</html>
+     </script>
+     <!-- AdminLTE + Bootstrap JS (CDN) -->
+     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+     <script src="https://cdn.jsdelivr.net/npm/admin-lte@4/dist/js/adminlte.min.js"></script>
+ </body>
+ </html>
 <?php
 if (isset($_GET['logout'])) {
     session_destroy();
