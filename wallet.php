@@ -63,6 +63,8 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'deposit';
 if (isset($_POST['deposit'])) {
     $amount = floatval($_POST['amount']);
     $method = $_POST['method'] ?? 'bank';
+    $referenceNumber = trim($_POST['reference_number'] ?? '');
+    
     if (!in_array($method, $allowedMethods)) {
         $_SESSION['error'] = 'This deposit method is currently disabled by admin.';
         header('Location: wallet.php');
@@ -72,20 +74,48 @@ if (isset($_POST['deposit'])) {
     if ($amount < 100) {
         $_SESSION['error'] = 'Minimum deposit amount is ' . formatCurrency(100, $userCurrency);
     } else {
-        // Create pending deposit transaction
+        // Handle proof of payment upload
+        $proofPath = null;
+        if (isset($_FILES['proof_of_payment']) && $_FILES['proof_of_payment']['error'] === 0) {
+            $uploadDir = 'uploads/deposits/';
+            if (!is_dir($uploadDir)) {
+                mkdir($uploadDir, 0755, true);
+            }
+            
+            $allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+            $fileType = $_FILES['proof_of_payment']['type'];
+            
+            if (in_array($fileType, $allowedTypes)) {
+                $extension = pathinfo($_FILES['proof_of_payment']['name'], PATHINFO_EXTENSION);
+                $filename = 'deposit_' . $_SESSION['user_id'] . '_' . time() . '.' . $extension;
+                $uploadPath = $uploadDir . $filename;
+                
+                if (move_uploaded_file($_FILES['proof_of_payment']['tmp_name'], $uploadPath)) {
+                    $proofPath = $uploadPath;
+                }
+            }
+        }
+        
+        // Create pending deposit transaction with proof
+        $description = "Deposit request via {$method}";
+        if ($referenceNumber) {
+            $description .= " (Ref: {$referenceNumber})";
+        }
+        
         $stmt = $pdo->prepare("
-            INSERT INTO transactions (user_id, type, amount, balance_before, balance_after, description, status, created_at) 
-            VALUES (?, 'deposit', ?, ?, ?, ?, 'pending', NOW())
+            INSERT INTO transactions (user_id, type, amount, balance_before, balance_after, description, status, receipt_image, created_at) 
+            VALUES (?, 'deposit', ?, ?, ?, ?, 'pending', ?, NOW())
         ");
         $stmt->execute([
             $_SESSION['user_id'],
             $amount,
             $balance,
             $balance,
-            "Deposit request via {$method}"
+            $description,
+            $proofPath
         ]);
         
-        $_SESSION['success'] = 'Deposit request submitted! Please wait for admin approval.';
+        $_SESSION['success'] = 'Deposit request submitted with proof of payment! Please wait for admin approval.';
     }
     
     header('Location: wallet.php');
@@ -175,6 +205,21 @@ if (isset($_POST['withdraw'])) {
                 $balance,
                 $description
             ]);
+            
+            $transactionId = $pdo->lastInsertId();
+            
+            // Send Telegram notification (non-blocking)
+            try {
+                if (file_exists('telegram_bot.php')) {
+                    require_once 'telegram_bot.php';
+                    $telegramBot = new TelegramBot();
+                    $telegramBot->notifyPendingWithdrawal($transactionId);
+                }
+            } catch (Exception $e) {
+                // Telegram notification failed but withdrawal was still created
+                // Log the error but don't block the user's withdrawal
+                error_log("Telegram bot error: " . $e->getMessage());
+            }
             
             // Save withdrawal preference for this method
             $saveStmt = $pdo->prepare("INSERT INTO user_withdrawal_preferences (user_id, method, account_details, crypto_network) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE account_details = VALUES(account_details), crypto_network = VALUES(crypto_network)");
@@ -756,7 +801,7 @@ $stats = $stmt->fetch(PDO::FETCH_ASSOC);
         <div id="deposit-tab" class="tab-content <?php echo $activeTab === 'deposit' ? 'active' : ''; ?>">
             <div class="card">
                 <h2 class="card-title">Deposit Funds</h2>
-                <form method="POST">
+                <form method="POST" enctype="multipart/form-data" id="depositForm">
                     <div class="form-group">
                         <label>Amount (<?php echo $userCurrency; ?>)</label>
                         <input type="number" name="amount" min="100" step="0.01" required 
@@ -765,29 +810,150 @@ $stats = $stmt->fetch(PDO::FETCH_ASSOC);
                     
                     <div class="form-group">
                         <label>Payment Method</label>
-                        <select name="method" required>
-                            <?php if (in_array('bank', $allowedMethods)): ?>
-                                <option value="bank">Bank Transfer</option>
-                            <?php endif; ?>
+                        <select name="method" id="paymentMethod" required onchange="showPaymentDetails(this.value)">
+                            <option value="">Select payment method</option>
                             <?php if (in_array('gcash', $allowedMethods)): ?>
                                 <option value="gcash">GCash</option>
                             <?php endif; ?>
                             <?php if (in_array('paymaya', $allowedMethods)): ?>
-                                <option value="paymaya">PayMaya</option>
+                                <option value="paymaya">Maya (PayMaya)</option>
                             <?php endif; ?>
                             <?php if (in_array('crypto', $allowedMethods)): ?>
                                 <option value="crypto">Cryptocurrency</option>
                             <?php endif; ?>
+                            <?php if (in_array('bank', $allowedMethods)): ?>
+                                <option value="bank">Bank Transfer</option>
+                            <?php endif; ?>
                         </select>
+                    </div>
+                    
+                    <!-- Payment Details Display -->
+                    <div id="paymentDetailsGcash" class="payment-details" style="display: none; background: #eef6ff; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #3b82f6; font-size: 14px; color: #0f172a;">
+                        <h3 style="margin-top: 0; color: #1e3a8a; font-size: 16px; font-weight: 700;">💳 Send Payment to GCash</h3>
+                        <?php if (!empty($siteSettings['gcash_number'])): ?>
+                            <p style="margin: 6px 0; color: #0f172a;"><strong>GCash Number:</strong> 
+                                <span style="font-size: 18px; color: #0f172a; font-weight: 700; letter-spacing: 0.3px;"><?php echo htmlspecialchars($siteSettings['gcash_number']); ?></span>
+                                <button type="button" class="copy-btn" onclick="copyText('<?php echo addslashes($siteSettings['gcash_number']); ?>')">Copy</button>
+                            </p>
+                        <?php endif; ?>
+                        <?php if (!empty($siteSettings['gcash_name'])): ?>
+                            <p style="margin: 6px 0; color: #0f172a;"><strong>Account Name:</strong> 
+                                <span style="font-weight: 600; color: #0f172a;"><?php echo htmlspecialchars($siteSettings['gcash_name']); ?></span>
+                            </p>
+                        <?php endif; ?>
+                        <p style="margin: 10px 0 0 0; font-size: 13px; color: #0f172a; opacity: 0.9;">Send the exact amount to the number above, then upload proof below.</p>
+                    </div>
+                    
+                    <div id="paymentDetailsMaya" class="payment-details" style="display: none; background: #effcf6; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #10b981; font-size: 14px; color: #0f172a;">
+                        <h3 style="margin-top: 0; color: #065f46; font-size: 16px; font-weight: 700;">💚 Send Payment to Maya</h3>
+                        <?php if (!empty($siteSettings['maya_number'])): ?>
+                            <p style="margin: 6px 0; color: #0f172a;"><strong>Maya Number:</strong> 
+                                <span style="font-size: 18px; color: #0f172a; font-weight: 700; letter-spacing: 0.3px;"><?php echo htmlspecialchars($siteSettings['maya_number']); ?></span>
+                                <button type="button" class="copy-btn" onclick="copyText('<?php echo addslashes($siteSettings['maya_number']); ?>')">Copy</button>
+                            </p>
+                        <?php endif; ?>
+                        <?php if (!empty($siteSettings['maya_name'])): ?>
+                            <p style="margin: 6px 0; color: #0f172a;"><strong>Account Name:</strong> 
+                                <span style="font-weight: 600; color: #0f172a;"><?php echo htmlspecialchars($siteSettings['maya_name']); ?></span>
+                            </p>
+                        <?php endif; ?>
+                        <p style="margin: 10px 0 0 0; font-size: 13px; color: #0f172a; opacity: 0.9;">Send the exact amount to the number above, then upload proof below.</p>
+                    </div>
+                    
+                    <div id="paymentDetailsCrypto" class="payment-details" style="display: none; background: #fff7ed; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #f59e0b; font-size: 14px; color: #0f172a;">
+                        <h3 style="margin-top: 0; color: #b45309; font-size: 16px; font-weight: 700;">₿ Send Cryptocurrency</h3>
+                        <?php if (!empty($siteSettings['crypto_btc_address'])): ?>
+                            <p style="margin: 8px 0 6px 0; color: #0f172a;"><strong>Bitcoin (BTC):</strong><br>
+                            <code style="background: #ffffff; color: #0f172a; padding: 6px 8px; border-radius: 4px; font-size: 13px; word-break: break-all; display: inline-block;"><?php echo htmlspecialchars($siteSettings['crypto_btc_address']); ?></code>
+                            <button type="button" class="copy-btn" onclick="copyText('<?php echo addslashes($siteSettings['crypto_btc_address']); ?>')">Copy</button></p>
+                        <?php endif; ?>
+                        <?php if (!empty($siteSettings['crypto_eth_address'])): ?>
+                            <p style="margin: 8px 0 6px 0; color: #0f172a;"><strong>Ethereum (ETH):</strong><br>
+                            <code style="background: #ffffff; color: #0f172a; padding: 6px 8px; border-radius: 4px; font-size: 13px; word-break: break-all; display: inline-block;"><?php echo htmlspecialchars($siteSettings['crypto_eth_address']); ?></code>
+                            <button type="button" class="copy-btn" onclick="copyText('<?php echo addslashes($siteSettings['crypto_eth_address']); ?>')">Copy</button></p>
+                        <?php endif; ?>
+                        <?php if (!empty($siteSettings['crypto_usdt_address'])): ?>
+                            <p style="margin: 8px 0 6px 0; color: #0f172a;"><strong>USDT (TRC20):</strong><br>
+                            <code style="background: #ffffff; color: #0f172a; padding: 6px 8px; border-radius: 4px; font-size: 13px; word-break: break-all; display: inline-block;"><?php echo htmlspecialchars($siteSettings['crypto_usdt_address']); ?></code>
+                            <button type="button" class="copy-btn" onclick="copyText('<?php echo addslashes($siteSettings['crypto_usdt_address']); ?>')">Copy</button></p>
+                        <?php endif; ?>
+                        <p style="margin: 10px 0 0 0; font-size: 13px; color: #0f172a; opacity: 0.9;">Send to the appropriate address above, then upload proof below.</p>
+                    </div>
+                    
+                    <div id="paymentDetailsBank" class="payment-details" style="display: none; background: #f8fafc; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #64748b; font-size: 14px; color: #0f172a;">
+                        <h3 style="margin-top: 0; color: #334155; font-size: 16px; font-weight: 700;">🏦 Bank Transfer</h3>
+                        <p style="margin: 6px 0; font-size: 13px; color: #0f172a; opacity: 0.9;">Contact support for bank transfer details.</p>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Reference Number (Optional)</label>
+                        <input type="text" name="reference_number" placeholder="Enter transaction reference number">
+                        <small style="color: #666;">You can provide reference number OR upload proof of payment below</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Proof of Payment (Screenshot/Photo)</label>
+                        <input type="file" name="proof_of_payment" accept="image/jpeg,image/jpg,image/png,image/webp">
+                        <small style="color: #666;">Upload a screenshot or photo of your payment confirmation</small>
                     </div>
                     
                     <button type="submit" name="deposit" class="btn">Submit Deposit Request</button>
                 </form>
                 
                 <div style="margin-top: 20px; padding: 15px; background: rgba(99, 102, 241, 0.1); border-radius: 8px; border-left: 4px solid <?php echo $themeColor; ?>;">
-                    <strong>Note:</strong> Deposits are processed manually by admin. Please wait for approval. You will receive a notification once your deposit is confirmed.
+                    <strong>Note:</strong> Deposits are processed manually by admin. Upload proof of payment or reference number to speed up approval.
                 </div>
             </div>
+            
+            <script>
+            // Lightweight copy-to-clipboard helper
+            function copyText(text) {
+                if (!text) return;
+                navigator.clipboard.writeText(text).then(() => {
+                    const msg = document.createElement('div');
+                    msg.textContent = 'Copied!';
+                    msg.style.position = 'fixed';
+                    msg.style.bottom = '20px';
+                    msg.style.right = '20px';
+                    msg.style.background = '#1e293b';
+                    msg.style.color = '#fff';
+                    msg.style.padding = '8px 12px';
+                    msg.style.border = '1px solid #334155';
+                    msg.style.borderRadius = '6px';
+                    msg.style.boxShadow = '0 6px 20px rgba(0,0,0,0.4)';
+                    msg.style.zIndex = '2000';
+                    document.body.appendChild(msg);
+                    setTimeout(() => msg.remove(), 1200);
+                });
+            }
+            
+            // Compact button style
+            (function() {
+                const style = document.createElement('style');
+                style.textContent = `.copy-btn{margin-left:8px;padding:4px 8px;border:1px solid #334155;border-radius:6px;background:#1e293b;color:#fff;font-size:12px;cursor:pointer} .copy-btn:hover{background:#334155}`;
+                document.head.appendChild(style);
+            })();
+            function showPaymentDetails(method) {
+                // Hide all payment details
+                document.querySelectorAll('.payment-details').forEach(el => el.style.display = 'none');
+                
+                // Map method to element IDs to avoid mismatches (e.g., paymaya → Maya)
+                const idMap = {
+                    gcash: 'paymentDetailsGcash',
+                    paymaya: 'paymentDetailsMaya',
+                    crypto: 'paymentDetailsCrypto',
+                    bank: 'paymentDetailsBank'
+                };
+                
+                const detailsId = idMap[method];
+                if (detailsId) {
+                    const detailsEl = document.getElementById(detailsId);
+                    if (detailsEl) {
+                        detailsEl.style.display = 'block';
+                    }
+                }
+            }
+            </script>
         </div>
         
         <!-- Withdraw Tab -->

@@ -5,6 +5,7 @@ require_once 'db_helper.php';
 require_once 'redis_helper.php';
 require_once 'currency_helper.php';
 require_once 'settings_helper.php';
+require_once 'rank_helper.php';
 
 if (!isset($_SESSION['user_id'])) {
     header('Location: login.php');
@@ -683,11 +684,76 @@ $loginHistory = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="stat-value" style="font-size: 18px; color: #10b981;">Active</div>
             </div>
             <div class="stat-card bets">
-                <div class="stat-label">🎲 Total Bets</div>
+                <div class="stat-label">🎲 Total Wagered</div>
                 <div class="stat-value"><?php echo formatCurrency($stats['total_bets'], $userCurrency); ?></div>
             </div>
         </div>
 
+        <!-- Rank Progress (Top) -->
+        <?php 
+            $userRank = UserRank::getRank($stats['total_bets']);
+            $nextRankInfo = UserRank::getNextRank($stats['total_bets']);
+        ?>
+        <div class="card" style="margin-top: 10px;">
+            <h2 class="card-title">🏆 Rank Progress</h2>
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                <div style="color: #9ca3af;">Current Rank:</div>
+                <div><?php echo UserRank::getRankBadge($userRank, 'large'); ?></div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+                <div style="padding: 12px; background: #0f1626; border-radius: 6px; border: 1px solid #2d3548;">
+                    <div style="font-size: 12px; color: #9ca3af; margin-bottom: 4px;">💰 Total Wagered</div>
+                    <div style="font-size: 18px; font-weight: 600; color: #10b981;">
+                        <?php echo formatCurrency($stats['total_bets'], $userCurrency); ?>
+                    </div>
+                </div>
+                <div style="padding: 12px; background: #0f1626; border-radius: 6px; border: 1px solid #2d3548;">
+                    <div style="font-size: 12px; color: #9ca3af; margin-bottom: 4px;">🎮 Total Bets</div>
+                    <div style="font-size: 18px; font-weight: 600; color: #3b82f6;">
+                        <?php echo number_format($stats['total_bets_count']); ?>
+                    </div>
+                </div>
+            </div>
+            
+            <?php if ($nextRankInfo): ?>
+                <div style="margin-top: 16px; padding: 16px; background: #0f1626; border-radius: 8px; border: 1px solid #2d3548;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <div>
+                            <div style="font-size: 12px; color: #9ca3af; margin-bottom: 4px;">Next Rank</div>
+                            <div style="font-size: 16px; font-weight: 600;">
+                                <?php echo UserRank::getRankIcon($nextRankInfo['rank']) . ' ' . $nextRankInfo['rank']; ?>
+                            </div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="font-size: 12px; color: #9ca3af; margin-bottom: 4px;">Required</div>
+                            <div style="font-size: 16px; font-weight: 600; color: #f59e0b;">
+                                <?php echo formatCurrency($nextRankInfo['threshold'], $userCurrency); ?>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="background: #1a1f36; border-radius: 10px; height: 24px; overflow: hidden; border: 1px solid #2d3548; position: relative;">
+                        <div style="background: linear-gradient(90deg, <?php echo UserRank::getRankColor($userRank); ?>, <?php echo UserRank::getRankColor($nextRankInfo['rank']); ?>); height: 100%; width: <?php echo min(100, $nextRankInfo['progress']); ?>%; transition: width 0.3s; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px;">
+                            <span style="font-size: 11px; font-weight: 600; color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.5);"><?php echo number_format($nextRankInfo['progress'], 1); ?>%</span>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px;">
+                        <span style="color: #9ca3af;">
+                            Progress: <?php echo formatCurrency($stats['total_bets'], $userCurrency); ?>
+                        </span>
+                        <span style="color: #ef4444; font-weight: 600;">
+                            Need: <?php echo formatCurrency($nextRankInfo['remaining'], $userCurrency); ?>
+                        </span>
+                    </div>
+                </div>
+            <?php else: ?>
+                <div style="margin-top: 12px; padding: 12px; background: linear-gradient(135deg, #ffd700, #ff8c00); border-radius: 8px; text-align: center; color: white; font-weight: 600;">
+                    🎉 Maximum Rank Achieved!
+                </div>
+            <?php endif; ?>
+        </div>
         <!-- Tabs -->
         <div class="tabs">
             <button class="tab active" onclick="switchTab('info')">📋 Account Info</button>
@@ -726,6 +792,8 @@ $loginHistory = $stmt->fetchAll(PDO::FETCH_ASSOC);
                         <div class="info-value"><?php echo $currentUser['last_login'] ? date('M d, Y H:i', strtotime($currentUser['last_login'])) : 'Never'; ?></div>
                     </div>
                 </div>
+                
+                
             </div>
         </div>
 

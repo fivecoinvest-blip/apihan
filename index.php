@@ -6,6 +6,9 @@ require_once 'redis_helper.php';
 require_once 'currency_helper.php';
 require_once 'settings_helper.php';
 
+// Check if user is logged in
+$loggedIn = isset($_SESSION['user_id']);
+
 // Load site settings
 $siteSettings = SiteSettings::load();
 $casinoName = $siteSettings['casino_name'] ?? 'Casino PHP';
@@ -22,8 +25,6 @@ $enabledBanners = array_values(array_filter($banners, function($b) use ($loggedI
     return true; 
 }));
 $showBanner = count($enabledBanners) > 0;
-
-$loggedIn = isset($_SESSION['user_id']);
 $balance = 0;
 $userCurrency = 'PHP';
 $username = '';

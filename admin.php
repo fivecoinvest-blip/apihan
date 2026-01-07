@@ -8,6 +8,7 @@ require_once 'db_helper.php';
 require_once 'redis_helper.php';
 require_once 'currency_helper.php';
 require_once 'settings_helper.php';
+require_once 'rank_helper.php';
 
 $cache = RedisCache::getInstance();
 
@@ -620,6 +621,27 @@ if (isset($_POST['approve_transaction'])) {
         try {
             $pdo->beginTransaction();
             
+            // Handle receipt upload for withdrawals
+            $receiptPath = null;
+            if ($type === 'withdrawal' && isset($_FILES['receipt_image']) && $_FILES['receipt_image']['error'] === UPLOAD_ERR_OK) {
+                $uploadDir = 'uploads/receipts/';
+                if (!is_dir($uploadDir)) {
+                    mkdir($uploadDir, 0777, true);
+                }
+                
+                $fileExtension = strtolower(pathinfo($_FILES['receipt_image']['name'], PATHINFO_EXTENSION));
+                $allowedExtensions = ['jpg', 'jpeg', 'png', 'webp', 'pdf'];
+                
+                if (in_array($fileExtension, $allowedExtensions)) {
+                    $fileName = 'receipt_' . $transId . '_' . time() . '.' . $fileExtension;
+                    $targetPath = $uploadDir . $fileName;
+                    
+                    if (move_uploaded_file($_FILES['receipt_image']['tmp_name'], $targetPath)) {
+                        $receiptPath = $targetPath;
+                    }
+                }
+            }
+            
             // Get current balance
             $stmt = $pdo->prepare("SELECT balance FROM users WHERE id = ?");
             $stmt->execute([$userId]);
@@ -643,15 +665,16 @@ if (isset($_POST['approve_transaction'])) {
             $stmt = $pdo->prepare("UPDATE users SET balance = ? WHERE id = ?");
             $stmt->execute([$newBalance, $userId]);
             
-            // Update transaction status and balance fields
+            // Update transaction status, balance fields, and receipt
             $stmt = $pdo->prepare("
                 UPDATE transactions 
                 SET status = 'completed',
                     balance_before = ?,
-                    balance_after = ?
+                    balance_after = ?,
+                    receipt_image = ?
                 WHERE id = ?
             ");
-            $stmt->execute([$currentBalance, $newBalance, $transId]);
+            $stmt->execute([$currentBalance, $newBalance, $receiptPath, $transId]);
             
             // Commit transaction
             $pdo->commit();
@@ -884,7 +907,9 @@ if (isset($_POST['update_settings'])) {
         'theme_color', 'min_bet', 'max_bet',
         'support_email', 'support_phone', 'facebook_url', 'twitter_url', 'instagram_url',
         'header_scripts', 'footer_scripts',
-        'banner_title', 'banner_subtitle', 'banner_link', 'banner_button_text'
+        'banner_title', 'banner_subtitle', 'banner_link', 'banner_button_text',
+        'gcash_number', 'gcash_name', 'maya_number', 'maya_name', 
+        'crypto_btc_address', 'crypto_eth_address', 'crypto_usdt_address'
     ];
     
     foreach ($settingsToUpdate as $key) {
@@ -969,6 +994,7 @@ if (isset($_GET['wallet_json'])) {
     header('Content-Type: application/json');
     echo json_encode([
         'pendingCount' => $pendingCount,
+        'pendingTransactions' => $pendingTransactions,
         'recentApproved' => $recentApproved,
         'recentFailed' => $recentFailed,
     ]);
@@ -1501,6 +1527,26 @@ $transactions = $pdo->query("
         .payment-method-card input[type="checkbox"]:checked + span {
             color: #fefefe;
         }
+        /* Payment details (compact) */
+        .payment-details-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 12px;
+            margin-top: 8px;
+        }
+        .payment-details-card {
+            background: #0f1626;
+            border: 1px solid #2d3548;
+            border-radius: 8px;
+            padding: 12px;
+        }
+        .payment-details-card h4 {
+            margin: 0 0 8px 0;
+            font-size: 16px;
+        }
+        .payment-details-card .form-group { margin-bottom: 10px; }
+        .payment-details-card .form-group label { font-size: 13px; margin-bottom: 5px; }
+        .payment-details-card .form-group input { padding: 8px 10px; font-size: 13px; }
         .close { 
             float: right; 
             font-size: 24px; 
@@ -1750,6 +1796,66 @@ $transactions = $pdo->query("
             </div>
         </div>
 
+        <!-- Tabs Navigation -->
+        <div class="tabs nav nav-pills mb-3" role="tablist">
+            <button class="tab nav-link active" role="tab" onclick="switchTab('games', this)">🎮 Games</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('wallet', this)" <?php if ($pendingCount > 0): ?>style="position: relative;"<?php endif; ?>>
+                💳 Wallet
+                <?php if ($pendingCount > 0): ?>
+                    <span id="pendingBadge" style="position: absolute; top: -5px; right: -5px; background: #ef4444; color: white; border-radius: 10px; padding: 2px 6px; font-size: 11px; font-weight: bold;"><?php echo $pendingCount; ?></span>
+                <?php endif; ?>
+            </button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('bonuses', this)">🎁 Bonuses</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('users', this)">👥 Users</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('history', this)">📊 Betting History</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('topplayers', this)">🏆 Top Players</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('mostplayed', this)">🎯 Most Bets Games</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('ranks', this)">🏅 Ranks</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('tool', this)">🛠️ Tool</button>
+            <button class="tab nav-link" role="tab" onclick="switchTab('settings', this)">⚙️ Settings</button>
+        </div>
+
+        <!-- Ranks Tab -->
+        <div id="ranks-tab" class="tab-content">
+            <div class="table-container">
+                <h2 style="margin-bottom: 20px;">🏅 Player Ranking System</h2>
+                <p style="color: #9ca3af; margin-bottom: 24px;">Players are automatically ranked based on their total wagered amount. Higher ranks unlock exclusive benefits and recognition.</p>
+                
+                <div style="display: grid; gap: 12px;">
+                    <?php 
+                    $allRanks = UserRank::getAllRanks();
+                    foreach ($allRanks as $rank): 
+                    ?>
+                        <div style="display: flex; align-items: center; gap: 16px; padding: 16px; background: linear-gradient(135deg, <?php echo $rank['color']; ?>, <?php echo UserRank::adjustBrightness($rank['color'], -30); ?>); border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);">
+                            <div style="font-size: 32px;"><?php echo $rank['icon']; ?></div>
+                            <div style="flex: 1;">
+                                <div style="font-size: 18px; font-weight: 600; color: white; margin-bottom: 4px;">
+                                    <?php echo htmlspecialchars($rank['name']); ?>
+                                </div>
+                                <div style="font-size: 14px; color: rgba(255,255,255,0.9);">
+                                    <?php echo UserRank::formatRankRange($rank['min'], $rank['max']); ?>
+                                </div>
+                            </div>
+                            <div style="padding: 8px 16px; background: rgba(255,255,255,0.2); border-radius: 6px; color: white; font-weight: 600; font-size: 14px;">
+                                Tier <?php echo count($allRanks) - array_search($rank, $allRanks); ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+                
+                <div style="margin-top: 24px; padding: 20px; background: #1a1f36; border-radius: 8px; border: 1px solid #2d3548;">
+                    <h3 style="margin: 0 0 12px; font-size: 16px;">💡 How Rankings Work</h3>
+                    <ul style="margin: 0; padding-left: 20px; color: #9ca3af; line-height: 1.8;">
+                        <li>Rankings are based on <strong>total amount wagered</strong> across all games</li>
+                        <li>Ranks are automatically calculated and updated in real-time</li>
+                        <li>Players can view their rank and progress on their profile page</li>
+                        <li>Higher ranks provide recognition and status within the community</li>
+                        <li>Ranks are permanent and cannot decrease</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
         <!-- Tool Tab -->
         <div id="tool-tab" class="tab-content">
             <div class="table-container">
@@ -1863,22 +1969,6 @@ $transactions = $pdo->query("
                     <?php endif; ?>
                 </div>
             </div>
-        </div>
-        <div class="tabs nav nav-pills mb-3" role="tablist">
-            <button class="tab nav-link active" role="tab" onclick="switchTab('games', this)">🎮 Games</button>
-            <button class="tab nav-link" role="tab" onclick="switchTab('wallet', this)" <?php if ($pendingCount > 0): ?>style="position: relative;"<?php endif; ?>>
-                💳 Wallet
-                <?php if ($pendingCount > 0): ?>
-                    <span id="pendingBadge" style="position: absolute; top: -5px; right: -5px; background: #ef4444; color: white; border-radius: 10px; padding: 2px 6px; font-size: 11px; font-weight: bold;"><?php echo $pendingCount; ?></span>
-                <?php endif; ?>
-            </button>
-            <button class="tab nav-link" role="tab" onclick="switchTab('bonuses', this)">🎁 Bonuses</button>
-            <button class="tab nav-link" role="tab" onclick="switchTab('users', this)">👥 Users</button>
-            <button class="tab nav-link" role="tab" onclick="switchTab('history', this)">📊 Betting History</button>
-            <button class="tab nav-link" role="tab" onclick="switchTab('topplayers', this)">🏆 Top Players</button>
-            <button class="tab nav-link" role="tab" onclick="switchTab('mostplayed', this)">🎯 Most Bets Games</button>
-            <button class="tab nav-link" role="tab" onclick="switchTab('tool', this)">🛠️ Tool</button>
-            <button class="tab nav-link" role="tab" onclick="switchTab('settings', this)">⚙️ Settings</button>
         </div>
 
         <!-- Games Tab -->
@@ -2212,10 +2302,11 @@ $transactions = $pdo->query("
                                 <th>Current Balance</th>
                                 <th>New Balance</th>
                                 <th>Description</th>
+                                <th>Proof</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody id="pendingTransactionsBody">
                             <?php foreach ($pendingTransactions as $trans): 
                                 $currency = $trans['currency'] ?? 'PHP';
                                 $isDeposit = $trans['type'] === 'deposit';
@@ -2245,13 +2336,30 @@ $transactions = $pdo->query("
                                     </td>
                                     <td><?php echo htmlspecialchars($trans['description']); ?></td>
                                     <td>
+                                        <?php if (!empty($trans['receipt_image']) && file_exists($trans['receipt_image'])): ?>
+                                            <a href="<?php echo htmlspecialchars($trans['receipt_image']); ?>" target="_blank" class="btn btn-small" style="background: #3b82f6; padding: 4px 8px; font-size: 12px;">
+                                                📷 View Proof
+                                            </a>
+                                        <?php else: ?>
+                                            <small style="color: #9ca3af;">No proof</small>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
                                         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                                            <form method="POST" style="margin: 0;" onsubmit="return confirm('Approve this <?php echo $trans['type']; ?>?');">
-                                                <input type="hidden" name="transaction_id" value="<?php echo $trans['id']; ?>">
-                                                <button type="submit" name="approve_transaction" class="btn btn-small" style="background: #10b981; <?php echo !$hasEnoughBalance ? 'opacity: 0.5; cursor: not-allowed;' : ''; ?>" <?php echo !$hasEnoughBalance ? 'disabled' : ''; ?>>
+                                            <?php if ($trans['type'] === 'withdrawal'): ?>
+                                                <!-- Withdrawal needs receipt -->
+                                                <button class="btn btn-small" style="background: #10b981;" onclick="showApproveWithReceiptModal(<?php echo $trans['id']; ?>, '<?php echo htmlspecialchars($trans['username'], ENT_QUOTES); ?>', <?php echo $trans['amount']; ?>, '<?php echo $currency; ?>', <?php echo $hasEnoughBalance ? 'true' : 'false'; ?>)" <?php echo !$hasEnoughBalance ? 'disabled' : ''; ?>>
                                                     ✅ Approve
                                                 </button>
-                                            </form>
+                                            <?php else: ?>
+                                                <!-- Deposit doesn't need receipt -->
+                                                <form method="POST" style="margin: 0;" onsubmit="return confirm('Approve this deposit?');">
+                                                    <input type="hidden" name="transaction_id" value="<?php echo $trans['id']; ?>">
+                                                    <button type="submit" name="approve_transaction" class="btn btn-small" style="background: #10b981;">
+                                                        ✅ Approve
+                                                    </button>
+                                                </form>
+                                            <?php endif; ?>
                                             <button class="btn btn-small btn-danger" onclick="showRejectModal(<?php echo $trans['id']; ?>, '<?php echo htmlspecialchars($trans['username'], ENT_QUOTES); ?>', '<?php echo $trans['type']; ?>')">
                                                 ❌ Reject
                                             </button>
@@ -2275,6 +2383,7 @@ $transactions = $pdo->query("
                             <th>Type</th>
                             <th>Amount</th>
                             <th>Description</th>
+                            <th>Receipt</th>
                         </tr>
                     </thead>
                     <tbody id="recentApprovedBody">
@@ -2289,6 +2398,15 @@ $transactions = $pdo->query("
                                 </td>
                                 <td><strong><?php echo formatCurrency($tx['amount'], $currency); ?></strong></td>
                                 <td><?php echo htmlspecialchars($tx['description']); ?></td>
+                                <td>
+                                    <?php if (!empty($tx['receipt_image']) && file_exists($tx['receipt_image'])): ?>
+                                        <a href="<?php echo htmlspecialchars($tx['receipt_image']); ?>" target="_blank" class="btn btn-small" style="background: #3b82f6;">
+                                            📎 View Receipt
+                                        </a>
+                                    <?php else: ?>
+                                        <small style="color: #9ca3af;">No receipt</small>
+                                    <?php endif; ?>
+                                </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -2466,6 +2584,7 @@ $transactions = $pdo->query("
                             <th>ID</th>
                             <th>Username</th>
                             <th>Phone</th>
+                            <th>Rank</th>
                             <th>Balance</th>
                             <th>Status</th>
                             <th>Device</th>
@@ -2479,11 +2598,13 @@ $transactions = $pdo->query("
                     <tbody>
                         <?php foreach ($users as $user): 
                             $userCurrency = $user['currency'] ?? 'PHP';
+                            $userRank = UserRank::getRank($user['total_bets'] ?? 0);
                         ?>
                             <tr>
                                 <td><?php echo $user['id']; ?></td>
                                 <td><?php echo htmlspecialchars($user['username']); ?></td>
                                 <td><?php echo htmlspecialchars($user['phone']); ?></td>
+                                <td><?php echo UserRank::getRankBadge($userRank, 'small'); ?></td>
                                 <td><strong><?php echo formatCurrency($user['balance'], $userCurrency); ?></strong></td>
                                 <td>
                                     <span class="badge <?php echo $user['status'] === 'active' ? 'badge-success' : 'badge-danger'; ?>">
@@ -2769,6 +2890,51 @@ $transactions = $pdo->query("
                     </div>
                     <small style="color: #666;">Uncheck to disable a payment method for users (deposit/withdraw).</small>
 
+                    <h3 style="margin-top: 30px;">Payment Details</h3>
+                    <p style="color: #9ca3af; margin-bottom: 12px;">Configure where users should send their deposits. These details will be shown to users.</p>
+                    
+                    <div class="payment-details-grid">
+                        <div class="payment-details-card">
+                            <h4 style="color: #3b82f6;">💳 GCash</h4>
+                            <div class="form-group">
+                                <label>GCash Number</label>
+                                <input type="text" name="gcash_number" value="<?php echo htmlspecialchars($siteSettings['gcash_number'] ?? ''); ?>" placeholder="09123456789">
+                            </div>
+                            <div class="form-group">
+                                <label>GCash Account Name</label>
+                                <input type="text" name="gcash_name" value="<?php echo htmlspecialchars($siteSettings['gcash_name'] ?? ''); ?>" placeholder="Juan Dela Cruz">
+                            </div>
+                        </div>
+                        
+                        <div class="payment-details-card">
+                            <h4 style="color: #10b981;">💚 Maya (PayMaya)</h4>
+                            <div class="form-group">
+                                <label>Maya Number</label>
+                                <input type="text" name="maya_number" value="<?php echo htmlspecialchars($siteSettings['maya_number'] ?? ''); ?>" placeholder="09123456789">
+                            </div>
+                            <div class="form-group">
+                                <label>Maya Account Name</label>
+                                <input type="text" name="maya_name" value="<?php echo htmlspecialchars($siteSettings['maya_name'] ?? ''); ?>" placeholder="Juan Dela Cruz">
+                            </div>
+                        </div>
+                        
+                        <div class="payment-details-card">
+                            <h4 style="color: #f59e0b;">₿ Cryptocurrency</h4>
+                            <div class="form-group">
+                                <label>Bitcoin (BTC) Address</label>
+                                <input type="text" name="crypto_btc_address" value="<?php echo htmlspecialchars($siteSettings['crypto_btc_address'] ?? ''); ?>" placeholder="bc1q...">
+                            </div>
+                            <div class="form-group">
+                                <label>Ethereum (ETH) Address</label>
+                                <input type="text" name="crypto_eth_address" value="<?php echo htmlspecialchars($siteSettings['crypto_eth_address'] ?? ''); ?>" placeholder="0x...">
+                            </div>
+                            <div class="form-group">
+                                <label>USDT (TRC20) Address</label>
+                                <input type="text" name="crypto_usdt_address" value="<?php echo htmlspecialchars($siteSettings['crypto_usdt_address'] ?? ''); ?>" placeholder="T...">
+                            </div>
+                        </div>
+                    </div>
+
                     <h3 style="margin-top: 30px;">Social Media</h3>
                     
                     <div class="form-group">
@@ -3052,6 +3218,7 @@ $transactions = $pdo->query("
                     <select name="category" required>
                         <option value="Slots">Slots</option>
                         <option value="Table">Table</option>
+                        <option value="Casino Live">Casino Live</option>
                         <option value="Fishing">Fishing</option>
                         <option value="Arcade">Arcade</option>
                     </select>
@@ -3099,6 +3266,7 @@ $transactions = $pdo->query("
                     <select name="category" id="edit_category" required>
                         <option value="Slots">Slots</option>
                         <option value="Table">Table</option>
+                        <option value="Casino Live">Casino Live</option>
                         <option value="Fishing">Fishing</option>
                         <option value="Arcade">Arcade</option>
                     </select>
@@ -3320,6 +3488,7 @@ $transactions = $pdo->query("
 
         // Wallet auto-refresh: poll server and update tables/badge
         function walletAutoRefresh(){
+            const pendingBody = document.getElementById('pendingTransactionsBody');
             const approvedBody = document.getElementById('recentApprovedBody');
             const failedBody = document.getElementById('recentFailedBody');
             const walletTabBtn = Array.from(document.querySelectorAll('.tabs .tab')).find(b => b.getAttribute('onclick') && b.getAttribute('onclick').includes("wallet"));
@@ -3351,6 +3520,45 @@ $transactions = $pdo->query("
                         badge.remove();
                     }
                 }
+                // Render pending transactions
+                if (pendingBody && data.pendingTransactions){
+                    if (data.pendingTransactions.length === 0){
+                        pendingBody.parentElement.parentElement.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #64748b;"><div style="font-size: 64px; margin-bottom: 20px;">✅</div><h3 style="margin-bottom: 10px;">No Pending Transactions</h3><p>All deposit and withdrawal requests have been processed.</p></div>';
+                    } else {
+                        const pendingRows = data.pendingTransactions.map(trans => {
+                            const d = new Date(trans.created_at);
+                            const dateStr = d.toLocaleString();
+                            const isDeposit = trans.type === 'deposit';
+                            const newBalance = isDeposit ? (parseFloat(trans.current_balance) + parseFloat(trans.amount)) : (parseFloat(trans.current_balance) - parseFloat(trans.amount));
+                            const hasEnoughBalance = newBalance >= 0;
+                            const currency = trans.currency || 'PHP';
+                            const typeBadge = isDeposit ? '<span class="badge badge-success">📥 Deposit</span>' : '<span class="badge badge-warning">📤 Withdrawal</span>';
+                            const rowStyle = hasEnoughBalance ? '' : ' style="background: #fee2e2;"';
+                            return `<tr${rowStyle}>
+                                <td>${dateStr}</td>
+                                <td><strong>${escapeHtml(trans.username)}</strong></td>
+                                <td>${escapeHtml(trans.phone || '')}</td>
+                                <td>${typeBadge}</td>
+                                <td><strong>${currency} ${parseFloat(trans.amount).toFixed(2)}</strong></td>
+                                <td>${currency} ${parseFloat(trans.current_balance).toFixed(2)}</td>
+                                <td><strong style="color: ${hasEnoughBalance ? (isDeposit ? '#10b981' : '#f59e0b') : '#ef4444'};">${currency} ${newBalance.toFixed(2)}</strong>${!hasEnoughBalance ? '<br><small style="color: #ef4444;">⚠️ Insufficient Balance</small>' : ''}</td>
+                                <td>${escapeHtml(trans.description || '')}</td>
+                                <td><div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                    ${isDeposit ? 
+                                        `<form method="POST" style="margin: 0;" onsubmit="return confirm('Approve this deposit?');">
+                                            <input type="hidden" name="transaction_id" value="${trans.id}">
+                                            <button type="submit" name="approve_transaction" class="btn btn-small" style="background: #10b981;">✅ Approve</button>
+                                        </form>` :
+                                        `<button class="btn btn-small" style="background: #10b981;" onclick="showApproveWithReceiptModal(${trans.id}, '${escapeHtml(trans.username)}', ${trans.amount}, '${currency}', ${hasEnoughBalance})" ${!hasEnoughBalance ? 'disabled' : ''}>✅ Approve</button>`
+                                    }
+                                    </form>
+                                    <button class="btn btn-small btn-danger" onclick="showRejectModal(${trans.id}, '${escapeHtml(trans.username)}', '${trans.type}')">❌ Reject</button>
+                                </div></td>
+                            </tr>`;
+                        }).join('');
+                        pendingBody.innerHTML = pendingRows;
+                    }
+                }
                 // Render tables
                 function renderRows(rows, isApproved){
                     return rows.map(tx => {
@@ -3359,12 +3567,14 @@ $transactions = $pdo->query("
                         const typeBadge = isApproved ? (tx.type === 'deposit' ? '<span class="badge badge-success">📥 Deposit</span>' : '<span class="badge badge-warning">📤 Withdrawal</span>') : '<span class="badge badge-danger">❌ Rejected</span>';
                         const amount = Number(tx.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                         const userCell = `<strong>${escapeHtml(tx.username || '')}</strong><br><small>${escapeHtml(tx.phone || '')}</small>`;
+                        const receiptCell = tx.receipt_image ? `<a href="${escapeHtml(tx.receipt_image)}" target="_blank" class="btn btn-small" style="background: #3b82f6;">📎 View Receipt</a>` : '<small style="color: #9ca3af;">No receipt</small>';
                         return `<tr>
                             <td>${dateStr}</td>
                             <td>${userCell}</td>
                             <td>${typeBadge}</td>
                             <td><strong>${amount}</strong></td>
                             <td>${escapeHtml(tx.description || '')}</td>
+                            ${isApproved ? `<td>${receiptCell}</td>` : ''}
                         </tr>`;
                     }).join('');
                 }
@@ -3698,6 +3908,40 @@ $transactions = $pdo->query("
                         <div style="display: flex; gap: 10px;">
                             <button type="button" class="btn" onclick="this.closest('.modal').remove()" style="flex: 1; background: #64748b;">Cancel</button>
                             <button type="submit" name="reject_transaction" class="btn btn-danger" style="flex: 1;">Reject Transaction</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+        
+        function showApproveWithReceiptModal(transactionId, username, amount, currency, hasEnoughBalance) {
+            if (!hasEnoughBalance) {
+                alert('User has insufficient balance for withdrawal');
+                return;
+            }
+            
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.style.display = 'block';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 600px;">
+                    <span class="close" onclick="this.closest('.modal').remove()">&times;</span>
+                    <h2 style="margin-bottom: 20px;">✅ Approve Withdrawal</h2>
+                    <form method="POST" enctype="multipart/form-data">
+                        <input type="hidden" name="transaction_id" value="${transactionId}">
+                        <div style="margin-bottom: 20px; padding: 16px; background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px;">
+                            <div style="margin-bottom: 8px;"><strong>User:</strong> ${username}</div>
+                            <div style="margin-bottom: 8px;"><strong>Amount:</strong> <span style="color: #f59e0b; font-size: 18px; font-weight: 600;">${currency} ${parseFloat(amount).toFixed(2)}</span></div>
+                        </div>
+                        <div style="margin-bottom: 20px;">
+                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Upload Proof of Transaction (Receipt):</label>
+                            <input type="file" name="receipt_image" accept="image/*,.pdf" style="width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: white;">
+                            <small style="color: #64748b; display: block; margin-top: 6px;">📎 Upload screenshot, photo, or PDF of the transaction receipt (optional but recommended)</small>
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <button type="button" class="btn" onclick="this.closest('.modal').remove()" style="flex: 1; background: #64748b;">Cancel</button>
+                            <button type="submit" name="approve_transaction" class="btn" style="flex: 1; background: #10b981;">✅ Approve Withdrawal</button>
                         </div>
                     </form>
                 </div>

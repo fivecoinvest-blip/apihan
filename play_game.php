@@ -17,18 +17,8 @@ $currentUser = $userModel->getById($_SESSION['user_id']);
 $balance = $userModel->getBalance($_SESSION['user_id']);
 $userCurrency = $currentUser['currency'] ?? 'PHP';
 
-$gameId = $_GET['game_id'] ?? '';
+$gameId = $_GET['game_id'] ?? '634';
 $gameName = $_GET['game_name'] ?? 'Casino Game';
-
-// Validate game ID
-if (empty($gameId)) {
-    $result = [
-        'success' => false,
-        'error' => 'Invalid game ID provided',
-        'error_code' => 'INVALID_GAME_ID'
-    ];
-    goto render_page;
-}
 
 // Check if game exists and is active
 try {

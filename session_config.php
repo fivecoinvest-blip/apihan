@@ -14,7 +14,7 @@ if (session_status() === PHP_SESSION_NONE) {
     
     // Ensure session cookies are sent over HTTPS only (if using SSL)
     // Set to 0 for HTTP, 1 for HTTPS
-    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || $_SERVER['SERVER_PORT'] == 443;
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (!empty($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
     ini_set('session.cookie_secure', $isHttps ? 1 : 0);
     
     // Prevent JavaScript access to session cookie
