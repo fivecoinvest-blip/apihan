@@ -1673,6 +1673,103 @@ $transactions = $pdo->query("
             </div>
         </div>
 
+        <!-- Tool Tab -->
+        <div id="tool-tab" class="tab-content">
+            <div class="table-container">
+                <h2 style="margin-bottom: 20px;">🛠️ Tools</h2>
+                <h3 style="margin-top: 0;">Marketing Banners</h3>
+                <?php 
+                    $banners = json_decode($siteSettings['banners'] ?? '[]', true);
+                    if (!is_array($banners)) { $banners = []; }
+                ?>
+                <div class="form-group" style="border: 1px solid #2d3548; border-radius: 8px; padding: 12px; background: #0f1626;">
+                    <h4 style="margin: 0 0 10px;">Add New Banner</h4>
+                    <form method="POST" enctype="multipart/form-data" style="display: grid; gap: 10px;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                            <div>
+                                <label>Title</label>
+                                <input type="text" name="banner_title" placeholder="Limited Time Promotion">
+                            </div>
+                            <div>
+                                <label>Button Text</label>
+                                <input type="text" name="banner_button_text" value="Play Now" placeholder="See Offer">
+                            </div>
+                            <div>
+                                <label>Link (URL)</label>
+                                <input type="url" name="banner_link" placeholder="https://your-campaign-url.com">
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <input type="checkbox" name="banner_enabled" value="1" checked>
+                                <span>Enabled</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label>Subtitle</label>
+                            <textarea name="banner_subtitle" rows="2" placeholder="Describe the promotion or campaign"></textarea>
+                        </div>
+                        <div>
+                            <label>Upload Image</label>
+                            <input type="file" name="banner_image" accept="image/*" required>
+                            <small style="color:#9ca3af;">Images are compressed to WebP/JPG (max width 1600px) for faster loading.</small>
+                        </div>
+                        <div>
+                            <button type="submit" name="add_banner" class="btn">➕ Add Banner</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="form-group" style="margin-top: 16px;">
+                    <h4 style="margin: 0 0 10px;">Existing Banners</h4>
+                    <?php if (empty($banners)): ?>
+                        <div style="padding: 12px; border: 1px solid #2d3548; border-radius: 8px; color: #9ca3af;">No banners yet.</div>
+                    <?php else: ?>
+                        <?php foreach ($banners as $idx => $bn): ?>
+                            <form method="POST" enctype="multipart/form-data" style="border: 1px solid #2d3548; border-radius: 8px; padding: 12px; margin-bottom: 12px; background:#0f1626; display: grid; gap: 10px;">
+                                <input type="hidden" name="banner_index" value="<?php echo $idx; ?>">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <div>
+                                        <label>Title</label>
+                                        <input type="text" name="banner_title" value="<?php echo htmlspecialchars($bn['title'] ?? ''); ?>">
+                                    </div>
+                                    <div>
+                                        <label>Button Text</label>
+                                        <input type="text" name="banner_button_text" value="<?php echo htmlspecialchars($bn['button_text'] ?? 'Play Now'); ?>">
+                                    </div>
+                                    <div>
+                                        <label>Link (URL)</label>
+                                        <input type="url" name="banner_link" value="<?php echo htmlspecialchars($bn['link'] ?? ''); ?>">
+                                    </div>
+                                    <div style="display:flex;align-items:center;gap:8px;">
+                                        <input type="checkbox" name="banner_enabled" value="1" <?php echo !empty($bn['enabled']) ? 'checked' : ''; ?>>
+                                        <span>Enabled</span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label>Subtitle</label>
+                                    <textarea name="banner_subtitle" rows="2"><?php echo htmlspecialchars($bn['subtitle'] ?? ''); ?></textarea>
+                                </div>
+                                <div>
+                                    <label>Current Image</label>
+                                    <?php if (!empty($bn['image']) && (filter_var($bn['image'], FILTER_VALIDATE_URL) || file_exists($bn['image']))): ?>
+                                        <img src="<?php echo htmlspecialchars($bn['image']); ?>" style="max-width: 100%; border-radius: 10px; border: 1px solid #2d3548; background: #0f1626; padding: 6px;">
+                                    <?php else: ?>
+                                        <div style="color:#9ca3af;">No image</div>
+                                    <?php endif; ?>
+                                </div>
+                                <div>
+                                    <label>Replace Image</label>
+                                    <input type="file" name="banner_image" accept="image/*">
+                                </div>
+                                <div style="display:flex; gap:8px;">
+                                    <button type="submit" name="update_banner" class="btn">💾 Save</button>
+                                    <button type="submit" name="delete_banner" class="btn" style="background:#ef4444;">🗑️ Delete</button>
+                                </div>
+                            </form>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </div>
         <div class="tabs">
             <button class="tab active" onclick="switchTab('games')">🎮 Games</button>
             <button class="tab" onclick="switchTab('wallet')" <?php if ($pendingCount > 0): ?>style="position: relative;"<?php endif; ?>>
@@ -1686,6 +1783,7 @@ $transactions = $pdo->query("
             <button class="tab" onclick="switchTab('history')">📊 Betting History</button>
             <button class="tab" onclick="switchTab('topplayers')">🏆 Top Players</button>
             <button class="tab" onclick="switchTab('mostplayed')">🎯 Most Bets Games</button>
+            <button class="tab" onclick="switchTab('tool')">🛠️ Tool</button>
             <button class="tab" onclick="switchTab('settings')">⚙️ Settings</button>
         </div>
 
@@ -2535,97 +2633,7 @@ $transactions = $pdo->query("
                         <input type="text" name="logo_path" value="<?php echo htmlspecialchars($siteSettings['logo_path'] ?? ''); ?>" placeholder="images/logo.png">
                     </div>
 
-                    <h3 style="margin-top: 30px;">Marketing Banners</h3>
-                    <?php 
-                        $banners = json_decode($siteSettings['banners'] ?? '[]', true);
-                        if (!is_array($banners)) { $banners = []; }
-                    ?>
-                    <div class="form-group" style="border: 1px solid #2d3548; border-radius: 8px; padding: 12px; background: #0f1626;">
-                        <h4 style="margin: 0 0 10px;">Add New Banner</h4>
-                        <form method="POST" enctype="multipart/form-data" style="display: grid; gap: 10px;">
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                                <div>
-                                    <label>Title</label>
-                                    <input type="text" name="banner_title" placeholder="Limited Time Promotion">
-                                </div>
-                                <div>
-                                    <label>Button Text</label>
-                                    <input type="text" name="banner_button_text" value="Play Now" placeholder="See Offer">
-                                </div>
-                                <div>
-                                    <label>Link (URL)</label>
-                                    <input type="url" name="banner_link" placeholder="https://your-campaign-url.com">
-                                </div>
-                                <div style="display:flex;align-items:center;gap:8px;">
-                                    <input type="checkbox" name="banner_enabled" value="1" checked>
-                                    <span>Enabled</span>
-                                </div>
-                            </div>
-                            <div>
-                                <label>Subtitle</label>
-                                <textarea name="banner_subtitle" rows="2" placeholder="Describe the promotion or campaign"></textarea>
-                            </div>
-                            <div>
-                                <label>Upload Image</label>
-                                <input type="file" name="banner_image" accept="image/*" required>
-                                <small style="color:#9ca3af;">Images are compressed to WebP/JPG (max width 1600px) for faster loading.</small>
-                            </div>
-                            <div>
-                                <button type="submit" name="add_banner" class="btn">➕ Add Banner</button>
-                            </div>
-                        </form>
-                    </div>
-
-                    <div class="form-group" style="margin-top: 16px;">
-                        <h4 style="margin: 0 0 10px;">Existing Banners</h4>
-                        <?php if (empty($banners)): ?>
-                            <div style="padding: 12px; border: 1px solid #2d3548; border-radius: 8px; color: #9ca3af;">No banners yet.</div>
-                        <?php else: ?>
-                            <?php foreach ($banners as $idx => $bn): ?>
-                                <form method="POST" enctype="multipart/form-data" style="border: 1px solid #2d3548; border-radius: 8px; padding: 12px; margin-bottom: 12px; background:#0f1626; display: grid; gap: 10px;">
-                                    <input type="hidden" name="banner_index" value="<?php echo $idx; ?>">
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                                        <div>
-                                            <label>Title</label>
-                                            <input type="text" name="banner_title" value="<?php echo htmlspecialchars($bn['title'] ?? ''); ?>">
-                                        </div>
-                                        <div>
-                                            <label>Button Text</label>
-                                            <input type="text" name="banner_button_text" value="<?php echo htmlspecialchars($bn['button_text'] ?? 'Play Now'); ?>">
-                                        </div>
-                                        <div>
-                                            <label>Link (URL)</label>
-                                            <input type="url" name="banner_link" value="<?php echo htmlspecialchars($bn['link'] ?? ''); ?>">
-                                        </div>
-                                        <div style="display:flex;align-items:center;gap:8px;">
-                                            <input type="checkbox" name="banner_enabled" value="1" <?php echo !empty($bn['enabled']) ? 'checked' : ''; ?>>
-                                            <span>Enabled</span>
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label>Subtitle</label>
-                                        <textarea name="banner_subtitle" rows="2"><?php echo htmlspecialchars($bn['subtitle'] ?? ''); ?></textarea>
-                                    </div>
-                                    <div>
-                                        <label>Current Image</label>
-                                        <?php if (!empty($bn['image']) && (filter_var($bn['image'], FILTER_VALIDATE_URL) || file_exists($bn['image']))): ?>
-                                            <img src="<?php echo htmlspecialchars($bn['image']); ?>" style="max-width: 100%; border-radius: 10px; border: 1px solid #2d3548; background: #0f1626; padding: 6px;">
-                                        <?php else: ?>
-                                            <div style="color:#9ca3af;">No image</div>
-                                        <?php endif; ?>
-                                    </div>
-                                    <div>
-                                        <label>Replace Image</label>
-                                        <input type="file" name="banner_image" accept="image/*">
-                                    </div>
-                                    <div style="display:flex; gap:8px;">
-                                        <button type="submit" name="update_banner" class="btn">💾 Save</button>
-                                        <button type="submit" name="delete_banner" class="btn" style="background:#ef4444;">🗑️ Delete</button>
-                                    </div>
-                                </form>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </div>
+                    <!-- Marketing banners moved to Tool tab -->
                     
                     <h3 style="margin-top: 30px;">Game Settings</h3>
                     
