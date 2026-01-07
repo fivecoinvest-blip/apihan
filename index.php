@@ -14,7 +14,13 @@ $themeColor = $siteSettings['theme_color'] ?? '#6366f1';
 // Multiple banners
 $banners = json_decode($siteSettings['banners'] ?? '[]', true);
 if (!is_array($banners)) { $banners = []; }
-$enabledBanners = array_values(array_filter($banners, function($b){ return !empty($b['enabled']) && !empty($b['image']); }));
+$enabledBanners = array_values(array_filter($banners, function($b) use ($loggedIn){ 
+    if (empty($b['enabled']) || empty($b['image'])) return false; 
+    $aud = $b['audience'] ?? 'all'; 
+    if ($aud === 'logged_in' && !$loggedIn) return false; 
+    if ($aud === 'guest' && $loggedIn) return false; 
+    return true; 
+}));
 $showBanner = count($enabledBanners) > 0;
 
 $loggedIn = isset($_SESSION['user_id']);
