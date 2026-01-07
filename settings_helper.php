@@ -129,6 +129,12 @@ class SiteSettings {
             'facebook_url' => '',
             'twitter_url' => '',
             'instagram_url' => '',
+            'banner_enabled' => '0',
+            'banner_image' => '',
+            'banner_title' => '',
+            'banner_subtitle' => '',
+            'banner_link' => '',
+            'banner_button_text' => 'Play Now',
         ];
     }
 }

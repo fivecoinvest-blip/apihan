@@ -11,6 +11,14 @@ $siteSettings = SiteSettings::load();
 $casinoName = $siteSettings['casino_name'] ?? 'Casino PHP';
 $casinoTagline = $siteSettings['casino_tagline'] ?? 'Play & Win Big!';
 $themeColor = $siteSettings['theme_color'] ?? '#6366f1';
+$bannerEnabled = ($siteSettings['banner_enabled'] ?? '0') === '1';
+$bannerImage = $siteSettings['banner_image'] ?? '';
+$bannerTitle = $siteSettings['banner_title'] ?? '';
+$bannerSubtitle = $siteSettings['banner_subtitle'] ?? '';
+$bannerLink = $siteSettings['banner_link'] ?? '';
+$bannerButtonText = $siteSettings['banner_button_text'] ?? 'Play Now';
+$hasBannerImage = !empty($bannerImage) && (filter_var($bannerImage, FILTER_VALIDATE_URL) || file_exists($bannerImage));
+$showBanner = $bannerEnabled && $hasBannerImage;
 
 $loggedIn = isset($_SESSION['user_id']);
 $balance = 0;
@@ -355,6 +363,88 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
         .btn-secondary:hover {
             background: #374151;
             color: #fff;
+        }
+
+        /* Promo banner */
+        .promo-banner {
+            background: linear-gradient(135deg, #0b1220 0%, #111827 100%);
+            border-bottom: 1px solid #1f2937;
+        }
+
+        .promo-banner__inner {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 18px 20px 14px;
+            display: grid;
+            grid-template-columns: 1fr;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .promo-banner__content {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .promo-banner__eyebrow {
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #fbbf24;
+            font-weight: 700;
+        }
+
+        .promo-banner__title {
+            font-size: clamp(20px, 3vw, 30px);
+            line-height: 1.2;
+        }
+
+        .promo-banner__text {
+            color: #cbd5e1;
+            line-height: 1.6;
+            font-size: 15px;
+        }
+
+        .promo-banner__cta {
+            align-self: flex-start;
+            padding: 10px 18px;
+            border-radius: 10px;
+            box-shadow: 0 10px 25px rgba(37, 99, 235, 0.35);
+            margin-top: 4px;
+        }
+
+        .promo-banner__media img {
+            width: 100%;
+            height: 100%;
+            max-height: 340px;
+            object-fit: cover;
+            border-radius: 14px;
+            border: 1px solid #1f2937;
+            background: #0f172a;
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+        }
+
+        @media (min-width: 960px) {
+            .promo-banner__inner {
+                grid-template-columns: 1.05fr 0.95fr;
+                padding: 22px 24px 18px;
+            }
+            .promo-banner__title {
+                font-size: 32px;
+            }
+            .promo-banner__media img {
+                max-height: 380px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .promo-banner__inner {
+                padding: 16px 14px 12px;
+            }
+            .promo-banner__media img {
+                max-height: 260px;
+            }
         }
         
         /* Mobile Responsive */
@@ -1289,6 +1379,28 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
             <?php endif; ?>
         </div>
     </div>
+    
+    <?php if ($showBanner): ?>
+    <section class="promo-banner">
+        <div class="promo-banner__inner">
+            <div class="promo-banner__content">
+                <div class="promo-banner__eyebrow">Featured</div>
+                <?php if (!empty($bannerTitle)): ?>
+                    <h1 class="promo-banner__title"><?php echo htmlspecialchars($bannerTitle); ?></h1>
+                <?php endif; ?>
+                <?php if (!empty($bannerSubtitle)): ?>
+                    <p class="promo-banner__text"><?php echo htmlspecialchars($bannerSubtitle); ?></p>
+                <?php endif; ?>
+                <?php if (!empty($bannerLink)): ?>
+                    <a class="btn btn-primary promo-banner__cta" href="<?php echo htmlspecialchars($bannerLink); ?>"><?php echo htmlspecialchars($bannerButtonText ?: 'Learn More'); ?></a>
+                <?php endif; ?>
+            </div>
+            <div class="promo-banner__media">
+                <img src="<?php echo htmlspecialchars($bannerImage); ?>" alt="<?php echo htmlspecialchars($bannerTitle ?: 'Promotion'); ?>">
+            </div>
+        </div>
+    </section>
+    <?php endif; ?>
     
     <!-- Search Bar -->
     <div class="search-container">

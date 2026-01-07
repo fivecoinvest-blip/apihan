@@ -11,6 +11,85 @@ require_once 'settings_helper.php';
 
 $cache = RedisCache::getInstance();
 
+// Compress and resize uploaded images (used for banners)
+function compressAndSaveImage($sourcePath, $targetDir, $baseName = 'banner', $maxWidth = 1600, $quality = 82) {
+    if (!file_exists($sourcePath)) {
+        return false;
+    }
+
+    if (!is_dir($targetDir)) {
+        mkdir($targetDir, 0777, true);
+    }
+
+    $info = @getimagesize($sourcePath);
+    if (!$info || empty($info['mime'])) {
+        return false;
+    }
+
+    $mime = $info['mime'];
+    $createMap = [
+        'image/jpeg' => 'imagecreatefromjpeg',
+        'image/png' => 'imagecreatefrompng',
+        'image/webp' => 'imagecreatefromwebp'
+    ];
+
+    $saveQuality = max(50, min(95, intval($quality)));
+
+    if (!isset($createMap[$mime]) || !function_exists($createMap[$mime])) {
+        $ext = pathinfo($sourcePath, PATHINFO_EXTENSION) ?: 'jpg';
+        $destPath = rtrim($targetDir, '/') . '/' . $baseName . '.' . $ext;
+        if (@copy($sourcePath, $destPath)) {
+            return $destPath;
+        }
+        return false;
+    }
+
+    $srcImage = @$createMap[$mime]($sourcePath);
+    if (!$srcImage) {
+        return false;
+    }
+
+    $width = $info[0];
+    $height = $info[1];
+    $newWidth = $width;
+    $newHeight = $height;
+
+    if ($width > $maxWidth) {
+        $ratio = $maxWidth / $width;
+        $newWidth = $maxWidth;
+        $newHeight = max(1, (int)floor($height * $ratio));
+    }
+
+    $dstImage = imagecreatetruecolor($newWidth, $newHeight);
+
+    if (in_array($mime, ['image/png', 'image/webp'])) {
+        imagealphablending($dstImage, false);
+        imagesavealpha($dstImage, true);
+    }
+
+    imagecopyresampled($dstImage, $srcImage, 0, 0, 0, 0, $newWidth, $newHeight, $width, $height);
+
+    $destBase = rtrim($targetDir, '/') . '/' . $baseName;
+    $destPath = '';
+    $saved = false;
+
+    if (function_exists('imagewebp')) {
+        $destPath = $destBase . '.webp';
+        $saved = imagewebp($dstImage, $destPath, $saveQuality);
+    }
+
+    if (!$saved) {
+        $destPath = $destBase . '.jpg';
+        $saved = imagejpeg($dstImage, $destPath, $saveQuality);
+    }
+
+    imagedestroy($srcImage);
+    imagedestroy($dstImage);
+
+    return $saved ? $destPath : false;
+}
+
+
 // Handle success/error messages from session
 $success = isset($_SESSION['success']) ? $_SESSION['success'] : null;
 $error = isset($_SESSION['error']) ? $_SESSION['error'] : null;
@@ -684,7 +763,8 @@ if (isset($_POST['update_settings'])) {
         'casino_name', 'casino_tagline', 'default_currency', 'logo_path',
         'theme_color', 'min_bet', 'max_bet',
         'support_email', 'support_phone', 'facebook_url', 'twitter_url', 'instagram_url',
-        'header_scripts', 'footer_scripts'
+        'header_scripts', 'footer_scripts',
+        'banner_title', 'banner_subtitle', 'banner_link', 'banner_button_text'
     ];
     
     foreach ($settingsToUpdate as $key) {
@@ -715,6 +795,20 @@ if (isset($_POST['update_settings'])) {
         
         if (move_uploaded_file($_FILES['logo_file']['tmp_name'], $uploadPath)) {
             SiteSettings::set('logo_path', $uploadPath);
+        }
+    }
+
+    // Banner visibility toggle
+    $bannerEnabled = isset($_POST['banner_enabled']) ? '1' : '0';
+    SiteSettings::set('banner_enabled', $bannerEnabled);
+
+    // Banner image upload with compression
+    if (isset($_FILES['banner_image']) && $_FILES['banner_image']['error'] === 0) {
+        $bannerDir = 'uploads/banners/';
+        $bannerFilename = 'banner_' . time();
+        $compressedPath = compressAndSaveImage($_FILES['banner_image']['tmp_name'], $bannerDir, $bannerFilename, 1600, 82);
+        if ($compressedPath) {
+            SiteSettings::set('banner_image', $compressedPath);
         }
     }
     
@@ -1230,6 +1324,34 @@ $transactions = $pdo->query("
         }
         .form-group input[type="checkbox"] { width: auto; }
         .form-group small { color: #9ca3af; font-size: 13px; }
+        .payment-methods-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 10px;
+        }
+        .payment-method-card {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            border-radius: 8px;
+            background: #0f1626;
+            border: 1px solid #2d3548;
+            color: #e5e7eb;
+            transition: border-color 0.15s ease, background 0.15s ease;
+        }
+        .payment-method-card:hover, .payment-method-card:focus-within {
+            border-color: #f97316;
+        }
+        .payment-method-card input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: #f97316;
+        }
+        .payment-method-card span { font-weight: 600; }
+        .payment-method-card input[type="checkbox"]:checked + span {
+            color: #fefefe;
+        }
         .close { 
             float: right; 
             font-size: 24px; 
@@ -2339,6 +2461,48 @@ $transactions = $pdo->query("
                         <label>Logo Path (URL)</label>
                         <input type="text" name="logo_path" value="<?php echo htmlspecialchars($siteSettings['logo_path'] ?? ''); ?>" placeholder="images/logo.png">
                     </div>
+
+                    <h3 style="margin-top: 30px;">Marketing Banner</h3>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 10px;">
+                            <input type="checkbox" name="banner_enabled" value="1" <?php echo (($siteSettings['banner_enabled'] ?? '0') === '1') ? 'checked' : ''; ?>>
+                            <span>Display banner on the main page</span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>Banner Title</label>
+                        <input type="text" name="banner_title" value="<?php echo htmlspecialchars($siteSettings['banner_title'] ?? ''); ?>" placeholder="Limited Time Promotion">
+                    </div>
+                    <div class="form-group">
+                        <label>Banner Subtitle</label>
+                        <textarea name="banner_subtitle" rows="2" placeholder="Describe the promotion or campaign" style="font-family: inherit; font-size: 14px; background: #0f1626; color: #e5e7eb; border: 1px solid #2d3548; border-radius: 6px; padding: 10px 12px;"><?php echo htmlspecialchars($siteSettings['banner_subtitle'] ?? ''); ?></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Button Text</label>
+                        <input type="text" name="banner_button_text" value="<?php echo htmlspecialchars($siteSettings['banner_button_text'] ?? 'Play Now'); ?>" placeholder="See Offer">
+                    </div>
+                    <div class="form-group">
+                        <label>Button Link (URL)</label>
+                        <input type="url" name="banner_link" value="<?php echo htmlspecialchars($siteSettings['banner_link'] ?? ''); ?>" placeholder="https://your-campaign-url.com">
+                        <small style="color: #666;">Leave blank to show the banner without a button.</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Current Banner Image</label>
+                        <?php 
+                            $currentBanner = $siteSettings['banner_image'] ?? '';
+                            $hasBannerPreview = !empty($currentBanner) && (filter_var($currentBanner, FILTER_VALIDATE_URL) || file_exists($currentBanner));
+                        ?>
+                        <?php if ($hasBannerPreview): ?>
+                            <img src="<?php echo htmlspecialchars($currentBanner); ?>" style="max-width: 100%; border-radius: 10px; border: 1px solid #2d3548; background: #0f1626; padding: 6px;">
+                        <?php else: ?>
+                            <p style="color: #999;">No banner uploaded</p>
+                        <?php endif; ?>
+                    </div>
+                    <div class="form-group">
+                        <label>Upload New Banner Image</label>
+                        <input type="file" name="banner_image" accept="image/*">
+                        <small style="color: #666;">Images are compressed to WebP/JPG (max width 1600px) for faster loading.</small>
+                    </div>
                     
                     <h3 style="margin-top: 30px;">Game Settings</h3>
                     
@@ -2365,14 +2529,14 @@ $transactions = $pdo->query("
                     </div>
                     
                     <h3 style="margin-top: 30px;">Payment Methods</h3>
-                    <div class="form-group" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px;">
+                    <div class="form-group payment-methods-grid">
                         <?php 
                             $validMethods = ['bank' => 'Bank Transfer', 'gcash' => 'GCash', 'paymaya' => 'PayMaya', 'crypto' => 'Cryptocurrency'];
                             $allowedMethods = json_decode($siteSettings['allowed_methods'] ?? '[]', true);
                             if (empty($allowedMethods)) { $allowedMethods = array_keys($validMethods); }
                         ?>
                         <?php foreach ($validMethods as $methodKey => $label): ?>
-                            <label style="display: flex; align-items: center; gap: 8px; background: #f8fafc; border: 1px solid #e2e8f0; padding: 10px; border-radius: 8px;">
+                            <label class="payment-method-card">
                                 <input type="checkbox" name="allowed_methods[]" value="<?php echo $methodKey; ?>" <?php echo in_array($methodKey, $allowedMethods) ? 'checked' : ''; ?>>
                                 <span><?php echo $label; ?></span>
                             </label>
