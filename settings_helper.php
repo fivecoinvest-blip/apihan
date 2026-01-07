@@ -135,6 +135,7 @@ class SiteSettings {
             'banner_subtitle' => '',
             'banner_link' => '',
             'banner_button_text' => 'Play Now',
+            'banners' => '[]',
         ];
     }
 }

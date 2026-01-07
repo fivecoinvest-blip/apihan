@@ -11,14 +11,11 @@ $siteSettings = SiteSettings::load();
 $casinoName = $siteSettings['casino_name'] ?? 'Casino PHP';
 $casinoTagline = $siteSettings['casino_tagline'] ?? 'Play & Win Big!';
 $themeColor = $siteSettings['theme_color'] ?? '#6366f1';
-$bannerEnabled = ($siteSettings['banner_enabled'] ?? '0') === '1';
-$bannerImage = $siteSettings['banner_image'] ?? '';
-$bannerTitle = $siteSettings['banner_title'] ?? '';
-$bannerSubtitle = $siteSettings['banner_subtitle'] ?? '';
-$bannerLink = $siteSettings['banner_link'] ?? '';
-$bannerButtonText = $siteSettings['banner_button_text'] ?? 'Play Now';
-$hasBannerImage = !empty($bannerImage) && (filter_var($bannerImage, FILTER_VALIDATE_URL) || file_exists($bannerImage));
-$showBanner = $bannerEnabled && $hasBannerImage;
+// Multiple banners
+$banners = json_decode($siteSettings['banners'] ?? '[]', true);
+if (!is_array($banners)) { $banners = []; }
+$enabledBanners = array_values(array_filter($banners, function($b){ return !empty($b['enabled']) && !empty($b['image']); }));
+$showBanner = count($enabledBanners) > 0;
 
 $loggedIn = isset($_SESSION['user_id']);
 $balance = 0;
@@ -365,7 +362,7 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
             color: #fff;
         }
 
-        /* Promo banner */
+        /* Promo banner slider */
         .promo-banner {
             background: linear-gradient(135deg, #0b1220 0%, #111827 100%);
             border-bottom: 1px solid #1f2937;
@@ -375,10 +372,28 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
             max-width: 1200px;
             margin: 0 auto;
             padding: 18px 20px 14px;
+        }
+
+        .promo-slider {
+            position: relative;
+            overflow: hidden;
+            border-radius: 12px;
+            border: 1px solid #1f2937;
+        }
+
+        .promo-slides {
+            display: flex;
+            transition: transform 0.5s ease;
+            will-change: transform;
+        }
+
+        .promo-slide {
+            flex: 0 0 100%;
             display: grid;
             grid-template-columns: 1fr;
             align-items: center;
             gap: 14px;
+            padding: 12px;
         }
 
         .promo-banner__content {
@@ -426,16 +441,11 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
         }
 
         @media (min-width: 960px) {
-            .promo-banner__inner {
-                grid-template-columns: 1.05fr 0.95fr;
-                padding: 22px 24px 18px;
-            }
             .promo-banner__title {
                 font-size: 32px;
             }
-            .promo-banner__media img {
-                max-height: 380px;
-            }
+            .promo-slide { grid-template-columns: 1.05fr 0.95fr; }
+            .promo-banner__media img { max-height: 380px; }
         }
 
         @media (max-width: 768px) {
@@ -1383,23 +1393,54 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
     <?php if ($showBanner): ?>
     <section class="promo-banner">
         <div class="promo-banner__inner">
-            <div class="promo-banner__content">
-                <div class="promo-banner__eyebrow">Featured</div>
-                <?php if (!empty($bannerTitle)): ?>
-                    <h1 class="promo-banner__title"><?php echo htmlspecialchars($bannerTitle); ?></h1>
-                <?php endif; ?>
-                <?php if (!empty($bannerSubtitle)): ?>
-                    <p class="promo-banner__text"><?php echo htmlspecialchars($bannerSubtitle); ?></p>
-                <?php endif; ?>
-                <?php if (!empty($bannerLink)): ?>
-                    <a class="btn btn-primary promo-banner__cta" href="<?php echo htmlspecialchars($bannerLink); ?>"><?php echo htmlspecialchars($bannerButtonText ?: 'Learn More'); ?></a>
-                <?php endif; ?>
-            </div>
-            <div class="promo-banner__media">
-                <img src="<?php echo htmlspecialchars($bannerImage); ?>" alt="<?php echo htmlspecialchars($bannerTitle ?: 'Promotion'); ?>">
+            <div class="promo-slider" id="promo-slider">
+                <div class="promo-slides" id="promo-slides">
+                    <?php foreach ($enabledBanners as $bn): ?>
+                        <div class="promo-slide">
+                            <div class="promo-banner__content">
+                                <div class="promo-banner__eyebrow">Featured</div>
+                                <?php if (!empty($bn['title'])): ?>
+                                    <h1 class="promo-banner__title"><?php echo htmlspecialchars($bn['title']); ?></h1>
+                                <?php endif; ?>
+                                <?php if (!empty($bn['subtitle'])): ?>
+                                    <p class="promo-banner__text"><?php echo htmlspecialchars($bn['subtitle']); ?></p>
+                                <?php endif; ?>
+                                <?php if (!empty($bn['link'])): ?>
+                                    <a class="btn btn-primary promo-banner__cta" href="<?php echo htmlspecialchars($bn['link']); ?>"><?php echo htmlspecialchars(($bn['button_text'] ?? 'Learn More')); ?></a>
+                                <?php endif; ?>
+                            </div>
+                            <div class="promo-banner__media">
+                                <img src="<?php echo htmlspecialchars($bn['image']); ?>" alt="<?php echo htmlspecialchars(($bn['title'] ?? 'Promotion')); ?>">
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
             </div>
         </div>
     </section>
+    <script>
+        (function(){
+            const slides = document.getElementById('promo-slides');
+            if (!slides) return;
+            const total = slides.children.length;
+            if (total <= 1) return;
+            let index = 0;
+            function go(n){
+                index = (n + total) % total;
+                slides.style.transform = `translateX(-${index*100}%)`;
+            }
+            setInterval(()=>go(index+1), 5000);
+            // Touch swipe
+            let startX = null;
+            slides.addEventListener('touchstart', (e)=>{ startX = e.touches[0].clientX; }, {passive:true});
+            slides.addEventListener('touchend', (e)=>{ 
+                if (startX === null) return; 
+                const dx = e.changedTouches[0].clientX - startX; 
+                if (Math.abs(dx) > 40){ go(index + (dx < 0 ? 1 : -1)); }
+                startX = null; 
+            });
+        })();
+    </script>
     <?php endif; ?>
     
     <!-- Search Bar -->
