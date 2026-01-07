@@ -248,16 +248,16 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
         .balance-dropdown {
             position: absolute;
             top: calc(100% + 10px);
-            right: -50px;
+            right: 0;
             background: #1e293b;
             border: 1px solid #334155;
             border-radius: 12px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            min-width: 220px;
+            min-width: 200px;
             opacity: 0;
             visibility: hidden;
             transform: translateY(-10px);
-            transition: all 0.3s;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             z-index: 1000;
             max-height: calc(100vh - 100px);
             overflow-y: auto;
@@ -272,39 +272,35 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
         .balance-dropdown a {
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 12px 16px;
-            color: #fff;
+            justify-content: flex-start;
+            padding: 14px 18px;
+            color: #e2e8f0;
             text-decoration: none;
-            transition: background 0.2s;
+            transition: all 0.2s ease;
             font-weight: 500;
-        }
-        
-        .balance-dropdown a span img {
-            vertical-align: middle;
-            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.2));
+            font-size: 14px;
+            border-left: 3px solid transparent;
         }
         
         .balance-dropdown a:first-child {
-            border-radius: 12px 12px 0 0;
+            border-radius: 11px 11px 0 0;
         }
         
         .balance-dropdown a:last-child {
-            border-radius: 0 0 12px 12px;
+            border-radius: 0 0 11px 11px;
         }
         
         .balance-dropdown a:hover {
             background: #334155;
+            border-left-color: #10b981;
+            color: #fff;
+            padding-left: 22px;
         }
         
         .balance-dropdown-divider {
             height: 1px;
-            background: #334155;
-            margin: 4px 0;
-        }
-        
-        .balance-dropdown .mobile-only {
-            display: none;
+            background: linear-gradient(90deg, transparent, #334155 20%, #334155 80%, transparent);
+            margin: 6px 0;
         }
         
         .auth-buttons {
@@ -386,8 +382,18 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
             }
             
             .balance-dropdown {
-                right: -30px;
+                right: 0;
                 min-width: 180px;
+                max-width: calc(100vw - 30px);
+            }
+            
+            .balance-dropdown a {
+                padding: 12px 16px;
+                font-size: 13px;
+            }
+            
+            .balance-dropdown a:hover {
+                padding-left: 20px;
             }
             
             /* Non-logged-in login button stays compact */
@@ -402,10 +408,6 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
                 font-size: 12px;
                 min-height: 38px;
                 white-space: nowrap;
-            }
-            
-            .balance-dropdown .mobile-only {
-                display: flex;
             }
         }
         
@@ -1263,14 +1265,14 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
                         <a href="wallet.php?tab=withdraw">
                             <span>Withdraw</span>
                         </a>
-                        <div class="balance-dropdown-divider mobile-only"></div>
-                        <a href="profile.php" class="mobile-only">
+                        <div class="balance-dropdown-divider"></div>
+                        <a href="profile.php">
                             <span>Profile</span>
                         </a>
-                        <a href="wallet.php" class="mobile-only">
+                        <a href="wallet.php">
                             <span>Wallet</span>
                         </a>
-                        <a href="logout.php" class="mobile-only">
+                        <a href="logout.php">
                             <span>Logout</span>
                         </a>
                     </div>
@@ -1718,6 +1720,135 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
                 updateBalance();
             }
         });
+        <?php endif; ?>
+        
+        // Bonus system (if logged in)
+        <?php if ($loggedIn): ?>
+        let bonusCheckTimeout;
+        
+        function checkBonuses() {
+            fetch('bonus_handler.php?action=get_available')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.bonuses && data.bonuses.length > 0) {
+                        showBonusPopup(data.bonuses);
+                    }
+                })
+                .catch(error => console.error('Bonus check failed:', error));
+        }
+        
+        function showBonusPopup(bonuses) {
+            const claimableBonuses = bonuses.filter(b => b.can_claim);
+            if (claimableBonuses.length === 0) return;
+            
+            const modal = document.createElement('div');
+            modal.className = 'bonus-modal';
+            modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fadeIn 0.3s;';
+            
+            const content = document.createElement('div');
+            content.style.cssText = 'background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border-radius: 20px; max-width: 500px; width: 100%; max-height: 80vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.5); animation: slideUp 0.3s;';
+            
+            let html = `
+                <style>
+                    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+                    @keyframes slideUp { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+                    @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+                    .bonus-card { transition: all 0.3s; }
+                    .bonus-card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(99, 102, 241, 0.3); }
+                </style>
+                <div style="padding: 30px;">
+                    <div style="text-align: center; margin-bottom: 25px;">
+                        <div style="font-size: 60px; margin-bottom: 10px; animation: pulse 2s infinite;">🎁</div>
+                        <h2 style="margin: 0 0 10px; font-size: 28px; background: linear-gradient(135deg, #6366f1, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Bonuses Available!</h2>
+                        <p style="color: #94a3b8; margin: 0;">Claim your rewards now</p>
+                    </div>
+            `;
+            
+            claimableBonuses.forEach(bonus => {
+                const typeColors = {
+                    registration: 'linear-gradient(135deg, #10b981, #059669)',
+                    deposit: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                    custom: 'linear-gradient(135deg, #6366f1, #4f46e5)'
+                };
+                const typeBg = typeColors[bonus.type] || typeColors.custom;
+                
+                html += `
+                    <div class="bonus-card" style="background: #1e293b; border: 2px solid #334155; border-radius: 15px; padding: 20px; margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
+                            <div>
+                                <h3 style="margin: 0 0 5px; font-size: 20px; color: #fff;">${bonus.name}</h3>
+                                <span style="display: inline-block; padding: 4px 12px; background: ${typeBg}; color: white; border-radius: 12px; font-size: 12px; font-weight: 600;">
+                                    ${bonus.type.charAt(0).toUpperCase() + bonus.type.slice(1)}
+                                </span>
+                            </div>
+                            <div style="text-align: right;">
+                                <div style="font-size: 28px; font-weight: bold; color: #10b981;">₱${parseFloat(bonus.amount).toFixed(2)}</div>
+                            </div>
+                        </div>
+                        ${bonus.description ? `<p style="color: #cbd5e1; margin: 0 0 15px; font-size: 14px;">${bonus.description}</p>` : ''}
+                        <button onclick="claimBonus(${bonus.id}, '${bonus.name}')" class="claim-btn" style="width: 100%; padding: 12px; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.3s;">
+                            🎉 Claim Bonus
+                        </button>
+                    </div>
+                `;
+            });
+            
+            html += `
+                    <button onclick="this.closest('.bonus-modal').remove()" style="width: 100%; padding: 12px; background: #334155; color: #fff; border: none; border-radius: 10px; font-size: 14px; cursor: pointer; margin-top: 10px;">
+                        Close
+                    </button>
+                </div>
+            `;
+            
+            content.innerHTML = html;
+            modal.appendChild(content);
+            document.body.appendChild(modal);
+        }
+        
+        function claimBonus(bonusId, bonusName) {
+            const formData = new FormData();
+            formData.append('bonus_id', bonusId);
+            
+            fetch('bonus_handler.php?action=claim', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Close bonus modal
+                    const modal = document.querySelector('.bonus-modal');
+                    if (modal) modal.remove();
+                    
+                    // Show success message
+                    showSuccessMessage(`✅ ${bonusName} claimed! ₱${parseFloat(data.amount).toFixed(2)} added to your balance.`);
+                    
+                    // Update balance
+                    updateBalance();
+                } else {
+                    alert('❌ ' + (data.error || 'Failed to claim bonus'));
+                }
+            })
+            .catch(error => {
+                console.error('Claim failed:', error);
+                alert('Failed to claim bonus. Please try again.');
+            });
+        }
+        
+        function showSuccessMessage(message) {
+            const msgDiv = document.createElement('div');
+            msgDiv.style.cssText = 'position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 20px 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(16, 185, 129, 0.5); z-index: 10001; font-weight: 600; animation: slideDown 0.5s;';
+            msgDiv.innerHTML = message;
+            document.body.appendChild(msgDiv);
+            
+            setTimeout(() => {
+                msgDiv.style.animation = 'fadeOut 0.5s';
+                setTimeout(() => msgDiv.remove(), 500);
+            }, 3000);
+        }
+        
+        // Check for bonuses on page load
+        setTimeout(checkBonuses, 2000);
         <?php endif; ?>
     </script>
     

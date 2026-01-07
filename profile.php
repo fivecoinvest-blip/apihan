@@ -188,8 +188,10 @@ $loginHistory = $stmt->fetchAll(PDO::FETCH_ASSOC);
             opacity: 0;
             visibility: hidden;
             transform: translateY(-10px);
-            transition: all 0.3s;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             z-index: 1000;
+            max-height: calc(100vh - 100px);
+            overflow-y: auto;
         }
         
         .balance-dropdown.active {
@@ -201,35 +203,38 @@ $loginHistory = $stmt->fetchAll(PDO::FETCH_ASSOC);
         .balance-dropdown a {
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 12px 16px;
-            color: #fff;
+            justify-content: flex-start;
+            padding: 14px 18px;
+            color: #e2e8f0;
             text-decoration: none;
-            transition: background 0.2s;
+            transition: all 0.2s ease;
             font-weight: 500;
+            font-size: 14px;
+            border-left: 3px solid transparent;
         }
         
         .balance-dropdown a:first-child {
-            border-radius: 12px 12px 0 0;
+            border-radius: 11px 11px 0 0;
         }
         
         .balance-dropdown a:last-child {
-            border-radius: 0 0 12px 12px;
+            border-radius: 0 0 11px 11px;
         }
         
         .balance-dropdown a:hover {
             background: #334155;
+            border-left-color: #10b981;
+            color: #fff;
+            padding-left: 22px;
         }
         
         .balance-dropdown-divider {
             height: 1px;
-            background: #334155;
-            margin: 4px 0;
+            background: linear-gradient(90deg, transparent, #334155 20%, #334155 80%, transparent);
+            margin: 6px 0;
         }
         
-        .balance-dropdown .mobile-only {
-            display: none;
-        }
+
         
         .auth-buttons {
             display: flex;
@@ -538,13 +543,26 @@ $loginHistory = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 font-size: 14px;
             }
             
+            .balance-dropdown {
+                right: 0;
+                min-width: 180px;
+                max-width: calc(100vw - 30px);
+            }
+            
+            .balance-dropdown a {
+                padding: 12px 16px;
+                font-size: 13px;
+            }
+            
+            .balance-dropdown a:hover {
+                padding-left: 20px;
+            }
+            
             .auth-buttons:not(.mobile-menu) {
                 display: none;
             }
             
-            .balance-dropdown .mobile-only {
-                display: flex;
-            }
+
             
             .user-info {
                 gap: 10px;
@@ -626,33 +644,23 @@ $loginHistory = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 </div>
                 <div class="balance-dropdown" id="balance-dropdown">
                     <a href="wallet.php?tab=deposit">
-                        <span>💰</span>
                         <span>Deposit</span>
                     </a>
                     <div class="balance-dropdown-divider"></div>
                     <a href="wallet.php?tab=withdraw">
-                        <span>💸</span>
                         <span>Withdraw</span>
                     </a>
-                    <div class="balance-dropdown-divider mobile-only"></div>
-                    <a href="profile.php" class="mobile-only">
-                        <span>👤</span>
+                    <div class="balance-dropdown-divider"></div>
+                    <a href="profile.php">
                         <span>Profile</span>
                     </a>
-                    <a href="wallet.php" class="mobile-only">
-                        <span>💳</span>
+                    <a href="wallet.php">
                         <span>Wallet</span>
                     </a>
-                    <a href="logout.php" class="mobile-only">
-                        <span>🚪</span>
+                    <a href="logout.php">
                         <span>Logout</span>
                     </a>
                 </div>
-            </div>
-            <div class="auth-buttons">
-                <a href="profile.php" class="btn btn-secondary">👤 Profile</a>
-                <a href="wallet.php" class="btn btn-primary">💳 Wallet</a>
-                <a href="logout.php" class="btn btn-secondary">Logout</a>
             </div>
         </div>
     </div>

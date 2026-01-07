@@ -15,6 +15,10 @@ if (!isset($_SESSION['user_id'])) {
 $siteSettings = SiteSettings::load();
 $casinoName = $siteSettings['casino_name'] ?? 'Casino PHP';
 $themeColor = $siteSettings['theme_color'] ?? '#6366f1';
+$allowedMethods = json_decode($siteSettings['allowed_methods'] ?? '[]', true);
+if (empty($allowedMethods)) {
+    $allowedMethods = ['bank','gcash','paymaya','crypto'];
+}
 
 $userModel = new User();
 $currentUser = $userModel->getById($_SESSION['user_id']);
@@ -24,6 +28,28 @@ $username = $currentUser['username'] ?? '';
 
 $db = Database::getInstance();
 $pdo = $db->getConnection();
+
+// Ensure withdrawal preferences table exists (idempotent)
+$pdo->exec("CREATE TABLE IF NOT EXISTS user_withdrawal_preferences (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    method ENUM('bank','gcash','paymaya','crypto') NOT NULL,
+    account_details TEXT NULL,
+    crypto_network VARCHAR(20) NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_user_method (user_id, method)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+// Load saved withdrawal preferences
+$prefStmt = $pdo->prepare("SELECT method, account_details, crypto_network FROM user_withdrawal_preferences WHERE user_id = ?");
+$prefStmt->execute([$_SESSION['user_id']]);
+$withdrawPrefs = [];
+foreach ($prefStmt->fetchAll(PDO::FETCH_ASSOC) as $pref) {
+    $withdrawPrefs[$pref['method']] = [
+        'account' => $pref['account_details'] ?? '',
+        'network' => $pref['crypto_network'] ?? ''
+    ];
+}
 
 // Handle success/error messages
 $success = isset($_SESSION['success']) ? $_SESSION['success'] : '';
@@ -37,6 +63,11 @@ $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'deposit';
 if (isset($_POST['deposit'])) {
     $amount = floatval($_POST['amount']);
     $method = $_POST['method'] ?? 'bank';
+    if (!in_array($method, $allowedMethods)) {
+        $_SESSION['error'] = 'This deposit method is currently disabled by admin.';
+        header('Location: wallet.php');
+        exit;
+    }
     
     if ($amount < 100) {
         $_SESSION['error'] = 'Minimum deposit amount is ' . formatCurrency(100, $userCurrency);
@@ -65,14 +96,18 @@ if (isset($_POST['deposit'])) {
 if (isset($_POST['withdraw'])) {
     $amount = floatval($_POST['amount']);
     $method = $_POST['method'] ?? 'bank';
-    $account = $_POST['account'] ?? '';
-    $cryptoType = $_POST['crypto_type'] ?? '';
+    if (!in_array($method, $allowedMethods)) {
+        $_SESSION['error'] = 'This withdrawal method is currently disabled by admin.';
+        header('Location: wallet.php?tab=withdraw');
+        exit;
+    }
+    $accountInput = trim($_POST['account'] ?? '');
+    $cryptoNetwork = strtoupper(trim($_POST['crypto_network'] ?? ''));
+    $cryptoAddress = trim($_POST['crypto_address'] ?? '');
     
     // Validation
     if ($amount < 100) {
         $_SESSION['error'] = 'Minimum withdrawal amount is ' . formatCurrency(100, $userCurrency);
-    } elseif (empty($account)) {
-        $_SESSION['error'] = 'Please provide account details for withdrawal';
     } else {
         $error = null;
         $charge = 0;
@@ -81,6 +116,10 @@ if (isset($_POST['withdraw'])) {
         
         // Method-specific validation
         if ($method === 'bank') {
+            $account = $accountInput;
+            if (empty($account)) {
+                $error = 'Please provide bank account details for withdrawal';
+            }
             // Bank transfer has 15% charge
             $charge = $amount * 0.15;
             $finalAmount = $amount + $charge;
@@ -92,6 +131,7 @@ if (isset($_POST['withdraw'])) {
             }
         } elseif (in_array($method, ['gcash', 'paymaya'])) {
             // GCash/PayMaya must match registered phone number
+            $account = $currentUser['phone']; // enforce registered phone
             $cleanInput = preg_replace('/[^0-9]/', '', $account);
             $cleanRegistered = preg_replace('/[^0-9]/', '', $currentUser['phone']);
             
@@ -103,13 +143,20 @@ if (isset($_POST['withdraw'])) {
                 $description = "Withdrawal: " . formatCurrency($amount, $userCurrency) . " to {$account} via " . ucfirst($method) . " (Free)";
             }
         } elseif ($method === 'crypto') {
-            // Only USDT allowed
-            if (empty($cryptoType) || strtoupper($cryptoType) !== 'USDT') {
-                $error = 'Only USDT cryptocurrency withdrawals are supported at this time';
-            } elseif ($amount > $balance) {
-                $error = 'Insufficient balance for withdrawal';
+            $allowedNetworks = ['TRC20', 'BEP20'];
+            if (empty($cryptoNetwork) || !in_array($cryptoNetwork, $allowedNetworks)) {
+                $error = 'Please select a valid USDT network (TRC20 or BEP20)';
+            } elseif (empty($cryptoAddress)) {
+                $error = 'Please provide your USDT wallet address';
             } else {
-                $description = "Withdrawal: " . formatCurrency($amount, $userCurrency) . " to {$account} via Crypto (USDT)";
+                $charge = 50; // flat network fee in PHP
+                $finalAmount = $amount + $charge;
+                if ($finalAmount > $balance) {
+                    $error = 'Insufficient balance. Total needed including network fee: ' . formatCurrency($finalAmount, $userCurrency);
+                } else {
+                    $account = $cryptoAddress; // store the address as account details
+                    $description = "Withdrawal: " . formatCurrency($amount, $userCurrency) . " + network fee " . formatCurrency($charge, $userCurrency) . " via USDT {$cryptoNetwork} to {$account}";
+                }
             }
         }
         
@@ -128,6 +175,16 @@ if (isset($_POST['withdraw'])) {
                 $balance,
                 $description
             ]);
+            
+            // Save withdrawal preference for this method
+            $saveStmt = $pdo->prepare("INSERT INTO user_withdrawal_preferences (user_id, method, account_details, crypto_network) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE account_details = VALUES(account_details), crypto_network = VALUES(crypto_network)");
+            if ($method === 'crypto') {
+                $saveStmt->execute([$_SESSION['user_id'], $method, $account, $cryptoNetwork]);
+            } elseif (in_array($method, ['gcash', 'paymaya'])) {
+                $saveStmt->execute([$_SESSION['user_id'], $method, $currentUser['phone'], null]);
+            } else { // bank
+                $saveStmt->execute([$_SESSION['user_id'], $method, $account, null]);
+            }
             
             $_SESSION['success'] = 'Withdrawal request submitted! Please wait for admin processing.';
         }
@@ -234,8 +291,10 @@ $stats = $stmt->fetch(PDO::FETCH_ASSOC);
             opacity: 0;
             visibility: hidden;
             transform: translateY(-10px);
-            transition: all 0.3s;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             z-index: 1000;
+            max-height: calc(100vh - 100px);
+            overflow-y: auto;
         }
         
         .balance-dropdown.active {
@@ -247,35 +306,38 @@ $stats = $stmt->fetch(PDO::FETCH_ASSOC);
         .balance-dropdown a {
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 12px 16px;
-            color: #fff;
+            justify-content: flex-start;
+            padding: 14px 18px;
+            color: #e2e8f0;
             text-decoration: none;
-            transition: background 0.2s;
+            transition: all 0.2s ease;
             font-weight: 500;
+            font-size: 14px;
+            border-left: 3px solid transparent;
         }
         
         .balance-dropdown a:first-child {
-            border-radius: 12px 12px 0 0;
+            border-radius: 11px 11px 0 0;
         }
         
         .balance-dropdown a:last-child {
-            border-radius: 0 0 12px 12px;
+            border-radius: 0 0 11px 11px;
         }
         
         .balance-dropdown a:hover {
             background: #334155;
+            border-left-color: #10b981;
+            color: #fff;
+            padding-left: 22px;
         }
         
         .balance-dropdown-divider {
             height: 1px;
-            background: #334155;
-            margin: 4px 0;
+            background: linear-gradient(90deg, transparent, #334155 20%, #334155 80%, transparent);
+            margin: 6px 0;
         }
         
-        .balance-dropdown .mobile-only {
-            display: none;
-        }
+
         
         .auth-buttons {
             display: flex;
@@ -570,13 +632,26 @@ $stats = $stmt->fetch(PDO::FETCH_ASSOC);
                 font-size: 14px;
             }
             
+            .balance-dropdown {
+                right: 0;
+                min-width: 180px;
+                max-width: calc(100vw - 30px);
+            }
+            
+            .balance-dropdown a {
+                padding: 12px 16px;
+                font-size: 13px;
+            }
+            
+            .balance-dropdown a:hover {
+                padding-left: 20px;
+            }
+            
             .auth-buttons:not(.mobile-menu) {
                 display: none;
             }
             
-            .balance-dropdown .mobile-only {
-                display: flex;
-            }
+
             
             .user-info {
                 gap: 10px;
@@ -638,33 +713,23 @@ $stats = $stmt->fetch(PDO::FETCH_ASSOC);
                 </div>
                 <div class="balance-dropdown" id="balance-dropdown">
                     <a href="wallet.php?tab=deposit">
-                        <span>💰</span>
                         <span>Deposit</span>
                     </a>
                     <div class="balance-dropdown-divider"></div>
                     <a href="wallet.php?tab=withdraw">
-                        <span>💸</span>
                         <span>Withdraw</span>
                     </a>
-                    <div class="balance-dropdown-divider mobile-only"></div>
-                    <a href="profile.php" class="mobile-only">
-                        <span>👤</span>
+                    <div class="balance-dropdown-divider"></div>
+                    <a href="profile.php">
                         <span>Profile</span>
                     </a>
-                    <a href="wallet.php" class="mobile-only">
-                        <span>💳</span>
+                    <a href="wallet.php">
                         <span>Wallet</span>
                     </a>
-                    <a href="logout.php" class="mobile-only">
-                        <span>🚪</span>
+                    <a href="logout.php">
                         <span>Logout</span>
                     </a>
                 </div>
-            </div>
-            <div class="auth-buttons">
-                <a href="profile.php" class="btn btn-secondary">👤 Profile</a>
-                <a href="wallet.php" class="btn btn-primary">💳 Wallet</a>
-                <a href="logout.php" class="btn btn-secondary">Logout</a>
             </div>
         </div>
     </div>
@@ -701,10 +766,18 @@ $stats = $stmt->fetch(PDO::FETCH_ASSOC);
                     <div class="form-group">
                         <label>Payment Method</label>
                         <select name="method" required>
-                            <option value="bank">Bank Transfer</option>
-                            <option value="gcash">GCash</option>
-                            <option value="paymaya">PayMaya</option>
-                            <option value="crypto">Cryptocurrency</option>
+                            <?php if (in_array('bank', $allowedMethods)): ?>
+                                <option value="bank">Bank Transfer</option>
+                            <?php endif; ?>
+                            <?php if (in_array('gcash', $allowedMethods)): ?>
+                                <option value="gcash">GCash</option>
+                            <?php endif; ?>
+                            <?php if (in_array('paymaya', $allowedMethods)): ?>
+                                <option value="paymaya">PayMaya</option>
+                            <?php endif; ?>
+                            <?php if (in_array('crypto', $allowedMethods)): ?>
+                                <option value="crypto">Cryptocurrency</option>
+                            <?php endif; ?>
                         </select>
                     </div>
                     
@@ -731,27 +804,50 @@ $stats = $stmt->fetch(PDO::FETCH_ASSOC);
                     <div class="form-group">
                         <label>Withdrawal Method</label>
                         <select name="method" id="withdrawMethod" required onchange="updateWithdrawInfo()">
-                            <option value="bank">Bank Transfer (15% fee)</option>
-                            <option value="gcash">GCash (Free)</option>
-                            <option value="paymaya">PayMaya (Free)</option>
-                            <option value="crypto">Cryptocurrency (USDT only)</option>
+                            <?php if (in_array('bank', $allowedMethods)): ?>
+                                <option value="bank">Bank Transfer (15% fee)</option>
+                            <?php endif; ?>
+                            <?php if (in_array('gcash', $allowedMethods)): ?>
+                                <option value="gcash">GCash (Free)</option>
+                            <?php endif; ?>
+                            <?php if (in_array('paymaya', $allowedMethods)): ?>
+                                <option value="paymaya">PayMaya (Free)</option>
+                            <?php endif; ?>
+                            <?php if (in_array('crypto', $allowedMethods)): ?>
+                                <option value="crypto">Cryptocurrency (USDT only)</option>
+                            <?php endif; ?>
                         </select>
                     </div>
+                    <?php if (empty($allowedMethods)): ?>
+                        <div class="alert alert-error">No withdrawal methods are currently enabled. Please contact support.</div>
+                    <?php endif; ?>
                     
                     <div id="cryptoTypeField" class="form-group" style="display: none;">
-                        <label>Cryptocurrency Type</label>
-                        <input type="text" name="crypto_type" value="USDT" readonly style="background: #1e293b; cursor: not-allowed;">
-                        <small style="color: #94a3b8;">Only USDT is supported at this time</small>
+                        <label>USDT Network</label>
+                        <select name="crypto_network" id="cryptoNetwork">
+                            <option value="TRC20">TRC20 (Recommended)</option>
+                            <option value="BEP20">BEP20</option>
+                        </select>
+                        <small style="color: #94a3b8;">Only USDT is supported. Network fee: <?php echo formatCurrency(50, $userCurrency); ?>.</small>
                     </div>
-                    
-                    <div class="form-group">
+        
+                    <div class="form-group" id="cryptoAddressField" style="display: none;">
+                        <label>USDT Wallet Address</label>
+                        <input type="text" name="crypto_address" id="cryptoAddress" autocomplete="off" placeholder="Paste your USDT address" required>
+                    </div>
+        
+                    <div class="form-group" id="accountDetailsField">
                         <label id="accountLabel">Account Details</label>
-                        <textarea name="account" id="accountDetails" required placeholder="Enter your account number, name, and other required details"></textarea>
+                        <textarea name="account" id="accountDetails" placeholder="Enter your bank account number, name, and details" required></textarea>
                         <small id="accountHint" style="color: #94a3b8; display: none;">Must match your registered phone: <?php echo htmlspecialchars($currentUser['phone']); ?></small>
                     </div>
                     
                     <div id="feeWarning" style="display: none; margin-bottom: 20px; padding: 15px; background: rgba(245, 158, 11, 0.1); border-radius: 8px; border-left: 4px solid #f59e0b;">
                         <strong>⚠️ Bank Transfer Fee:</strong> <span id="feeAmount"></span>
+                    </div>
+                    
+                    <div id="networkFee" style="display: none; margin-bottom: 20px; padding: 15px; background: rgba(59, 130, 246, 0.12); border-radius: 8px; border-left: 4px solid #3b82f6;">
+                        <strong>🌐 USDT Network Fee:</strong> Flat <?php echo formatCurrency(50, $userCurrency); ?> for TRC20/BEP20.
                     </div>
                     
                     <div id="freeInfo" style="display: none; margin-bottom: 20px; padding: 15px; background: rgba(34, 197, 94, 0.1); border-radius: 8px; border-left: 4px solid #22c55e;">
@@ -767,7 +863,7 @@ $stats = $stmt->fetch(PDO::FETCH_ASSOC);
                         <li>Minimum withdrawal: <?php echo formatCurrency(100, $userCurrency); ?></li>
                         <li>Bank transfers incur a 15% processing fee</li>
                         <li>GCash and PayMaya withdrawals are free but must use your registered phone number</li>
-                        <li>Only USDT cryptocurrency withdrawals are supported</li>
+                        <li>Crypto (USDT only): TRC20 or BEP20, flat <?php echo formatCurrency(50, $userCurrency); ?> network fee</li>
                         <li>Withdrawals are processed within 24-48 hours</li>
                     </ul>
                 </div>
@@ -833,6 +929,17 @@ $stats = $stmt->fetch(PDO::FETCH_ASSOC);
     </div>
     
     <script>
+        const savedPrefs = <?php echo json_encode([
+            'bank' => $withdrawPrefs['bank']['account'] ?? '',
+            'gcash' => $withdrawPrefs['gcash']['account'] ?? $currentUser['phone'] ?? '',
+            'paymaya' => $withdrawPrefs['paymaya']['account'] ?? $currentUser['phone'] ?? '',
+            'crypto' => [
+                'account' => $withdrawPrefs['crypto']['account'] ?? '',
+                'network' => $withdrawPrefs['crypto']['network'] ?? 'TRC20'
+            ]
+        ], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
+        const userPhone = '<?php echo htmlspecialchars($currentUser['phone'], ENT_QUOTES); ?>';
+
         function showTab(tabName) {
             // Hide all tabs
             document.querySelectorAll('.tab-content').forEach(tab => {
@@ -858,18 +965,31 @@ $stats = $stmt->fetch(PDO::FETCH_ASSOC);
             const accountHint = document.getElementById('accountHint');
             const accountLabel = document.getElementById('accountLabel');
             const feeWarning = document.getElementById('feeWarning');
+            const networkFee = document.getElementById('networkFee');
             const freeInfo = document.getElementById('freeInfo');
             const accountDetails = document.getElementById('accountDetails');
+            const cryptoNetwork = document.getElementById('cryptoNetwork');
+            const cryptoAddressField = document.getElementById('cryptoAddressField');
+            const cryptoAddress = document.getElementById('cryptoAddress');
+            const accountDetailsField = document.getElementById('accountDetailsField');
             
             // Reset displays
             cryptoField.style.display = 'none';
+            cryptoAddressField.style.display = 'none';
+            accountDetailsField.style.display = 'block';
             accountHint.style.display = 'none';
             feeWarning.style.display = 'none';
             freeInfo.style.display = 'none';
+            networkFee.style.display = 'none';
+            accountDetails.readOnly = false;
+            cryptoAddress.value = '';
+            accountDetails.required = true;
+            cryptoAddress.required = false;
             
             if (method === 'bank') {
                 accountLabel.textContent = 'Bank Account Details';
                 accountDetails.placeholder = 'Enter your bank name, account number, account name';
+                accountDetails.value = savedPrefs.bank || '';
                 if (amount > 0) {
                     const fee = amount * 0.15;
                     const total = amount + fee;
@@ -883,10 +1003,20 @@ $stats = $stmt->fetch(PDO::FETCH_ASSOC);
                 accountDetails.placeholder = 'Enter your ' + (method === 'gcash' ? 'GCash' : 'PayMaya') + ' mobile number';
                 accountHint.style.display = 'block';
                 freeInfo.style.display = 'block';
+                accountDetails.readOnly = true;
+                accountDetails.value = userPhone;
             } else if (method === 'crypto') {
                 accountLabel.textContent = 'USDT Wallet Address';
-                accountDetails.placeholder = 'Enter your USDT wallet address (TRC20 or ERC20)';
+                accountDetailsField.style.display = 'none';
                 cryptoField.style.display = 'block';
+                cryptoAddressField.style.display = 'block';
+                networkFee.style.display = 'block';
+                cryptoAddress.value = savedPrefs.crypto.account || '';
+                if (savedPrefs.crypto.network) {
+                    cryptoNetwork.value = savedPrefs.crypto.network;
+                }
+                accountDetails.required = false;
+                cryptoAddress.required = true;
             }
         }
         
