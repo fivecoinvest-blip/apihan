@@ -33,6 +33,17 @@ $cache = RedisCache::getInstance();
 if ($loggedIn) {
     $userModel = new User();
     $currentUser = $userModel->getById($_SESSION['user_id']);
+    
+    // Check if user is banned or suspended
+    if (isset($currentUser['status']) && in_array($currentUser['status'], ['banned', 'suspended'])) {
+        session_unset();
+        session_destroy();
+        session_start();
+        $_SESSION['error'] = 'Your account has been ' . $currentUser['status'] . '. Please contact support.';
+        header('Location: login.php');
+        exit;
+    }
+    
     $balance = $userModel->getBalance($_SESSION['user_id']); // Already uses Redis cache
     $userCurrency = $currentUser['currency'] ?? 'PHP';
     $username = $currentUser['username'] ?? '';
@@ -1365,12 +1376,11 @@ $totalGamesCount = $cache->remember($cacheKey, function() use ($pdo) {
                         <?php echo formatCurrency($balance, $userCurrency); ?>
                     </div>
                     <div class="balance-dropdown" id="balance-dropdown">
-                        <a href="wallet.php?tab=deposit">
-                            <span>Deposit</span>
+                        <a href="wallet.php?tab=deposit" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600;">
+                            <span>⚡ Auto Deposit</span>
                         </a>
-                        <div class="balance-dropdown-divider"></div>
-                        <a href="wallet.php?tab=withdraw">
-                            <span>Withdraw</span>
+                        <a href="wallet.php?tab=withdrawal" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; font-weight: 600;">
+                            <span>⚡ Auto Withdrawal</span>
                         </a>
                         <div class="balance-dropdown-divider"></div>
                         <a href="profile.php">

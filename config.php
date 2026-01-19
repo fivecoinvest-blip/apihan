@@ -12,8 +12,8 @@ define('API_SECRET', 'dc6b955933342d32d49b84c52b59184f');   // 32-character secr
 define('SERVER_URL', 'https://igamingapis.live/api/v1');
 
 // Your Website URLs
-define('RETURN_URL', 'https://31.97.107.21/');       // URL where user returns after playing
-define('CALLBACK_URL', 'http://31.97.107.21/callback.php'); // URL where game sends results (HTTP for API access)
+define('RETURN_URL', 'https://paldo88.site/');       // URL where user returns after playing
+define('CALLBACK_URL', 'https://paldo88.site/callback.php'); // URL where game sends results
 
 // Database Configuration (Optional - configure as needed)
 define('DB_HOST', 'localhost');

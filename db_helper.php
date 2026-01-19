@@ -205,6 +205,19 @@ class User {
         
         return $balance;
     }
+
+    // Force-refresh balance directly from DB (bypass cache) for critical flows like game launch
+    public function getBalanceFresh($userId) {
+        $stmt = $this->db->prepare("SELECT balance FROM users WHERE id = ?");
+        $stmt->execute([$userId]);
+        $result = $stmt->fetch();
+        $balance = $result ? (float)$result['balance'] : 0;
+
+        // Update cache so subsequent reads stay consistent
+        $this->cache->refreshBalance($userId, $balance);
+
+        return $balance;
+    }
     
     public function updateBalance($userId, $newBalance) {
         // Update database first

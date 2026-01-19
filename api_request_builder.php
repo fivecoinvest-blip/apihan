@@ -75,22 +75,34 @@ function sendLaunchGameRequest(array $params): array {
     // ==========================================
     try {
         $ch = curl_init($apiUrl);
+        
+        // Get user agent from current request
+        $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? 'Mozilla/5.0 (Unknown)';
+        
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_TIMEOUT => 60,           // Increased timeout to 60 seconds
             CURLOPT_CONNECTTIMEOUT => 30,    // Connection timeout
+            CURLOPT_USERAGENT => $userAgent, // Pass the user's actual user agent
             CURLOPT_HTTPHEADER => [
                 'Content-Type: application/json',
-                'Accept: application/json'
+                'Accept: application/json',
+                'User-Agent: ' . $userAgent  // Also set in headers for consistency
             ]
         ]);
         
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlErrno = curl_errno($ch);
+        $curlError = curl_error($ch);
         
-        if (curl_errno($ch)) {
-            throw new Exception(curl_error($ch));
+        // Log request details for debugging mobile issues
+        error_log("Game API Request - User Agent: {$userAgent}, HTTP Code: {$httpCode}");
+        
+        if ($curlErrno) {
+            error_log("Game API CURL Error: {$curlError} (errno: {$curlErrno})");
+            throw new Exception("API Error: {$curlError}");
         }
         
         curl_close($ch);

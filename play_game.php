@@ -14,8 +14,22 @@ require_once 'currency_helper.php';
 
 $userModel = new User();
 $currentUser = $userModel->getById($_SESSION['user_id']);
-$balance = $userModel->getBalance($_SESSION['user_id']);
+
+// Check if user is banned or suspended
+if (isset($currentUser['status']) && in_array($currentUser['status'], ['banned', 'suspended'])) {
+    session_unset();
+    session_destroy();
+    session_start();
+    $_SESSION['error'] = 'Your account has been ' . $currentUser['status'] . '. Please contact support.';
+    header('Location: login.php');
+    exit;
+}
+
+$balance = $userModel->getBalanceFresh($_SESSION['user_id']); // bypass cache to avoid stale/zero during launch
 $userCurrency = $currentUser['currency'] ?? 'PHP';
+
+// Force PHP for API payload (prevents USDT issues on provider callback)
+$payloadCurrency = 'PHP';
 
 $gameId = $_GET['game_id'] ?? '634';
 $gameName = $_GET['game_name'] ?? 'Casino Game';
@@ -73,7 +87,9 @@ error_log("Launching game for user {$userId} with balance: {$balance}");
 $params = createGameLaunchRequest(
     userId: $userId,
     balance: $balance,
-    gameUid: $gameId
+    gameUid: $gameId,
+    currencyCode: $payloadCurrency,
+    language: 'en'
 );
 
 $result = sendLaunchGameRequest($params);
@@ -106,8 +122,7 @@ render_page:
         .floating-home {
             position: fixed;
             top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
+            left: 20px;
             width: 60px;
             height: 60px;
             background: linear-gradient(135deg, #3b82f6, #2563eb);
@@ -128,11 +143,11 @@ render_page:
         
         .floating-home:hover {
             box-shadow: 0 8px 35px rgba(59, 130, 246, 0.8);
-            transform: translateX(-50%) scale(1.1);
+            transform: scale(1.1);
         }
         
         .floating-home:active {
-            transform: translateX(-50%) scale(0.95);
+            transform: scale(0.95);
         }
         
         .floating-home.dragging {
@@ -144,8 +159,7 @@ render_page:
         .home-tooltip {
             position: fixed;
             top: 90px;
-            left: 50%;
-            transform: translateX(-50%);
+            left: 20px;
             background: rgba(0, 0, 0, 0.85);
             color: white;
             padding: 8px 16px;
@@ -269,9 +283,16 @@ render_page:
             <iframe src="<?php echo htmlspecialchars($result['game_url']); ?>" 
                     class="game-frame" 
                     id="gameFrame"
-                    allowfullscreen></iframe>
+                    allowfullscreen
+                    allow="accelerometer; camera; gyroscope; microphone; payment"
+                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe>
         </div>
-        <button class="floating-home" id="floatingBtn" title="Drag to move">🏠</button>
+        <button class="floating-home" id="floatingBtn" title="Drag to move">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M3 9L12 2L21 9V20C21 20.5304 20.7893 21.0391 20.4142 21.4142C20.0391 21.7893 19.5304 22 19 22H5C4.46957 22 3.96086 21.7893 3.58579 21.4142C3.21071 21.0391 3 20.5304 3 20V9Z" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M9 22V12H15V22" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </button>
         <div class="home-tooltip">Back to Lobby</div>
     <?php else: ?>
         <div class="error-container" id="errorContainer">
@@ -306,7 +327,12 @@ render_page:
                     </button>
                 </div>
             </div>
-            <button class="floating-home" id="floatingBtn" title="Drag to move">🏠</button>
+            <button class="floating-home" id="floatingBtn" title="Drag to move">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M3 9L12 2L21 9V20C21 20.5304 20.7893 21.0391 20.4142 21.4142C20.0391 21.7893 19.5304 22 19 22H5C4.46957 22 3.96086 21.7893 3.58579 21.4142C3.21071 21.0391 3 20.5304 3 20V9Z" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M9 22V12H15V22" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
             <div class="home-tooltip">Back to Lobby</div>
         </div>
     <?php endif; ?>
@@ -336,9 +362,9 @@ render_page:
         }
         
         // Keep session alive during gameplay
-        // Ping server every 2 minutes to prevent session timeout and detect balance changes
+        // Ping server every 30 seconds to prevent session timeout and get real-time balance updates during active play
         setInterval(function() {
-            fetch('keep_alive.php')
+            fetch('/keep_alive.php')
                 .then(response => response.json())
                 .then(data => {
                     console.log('Session kept alive:', data);
@@ -350,7 +376,7 @@ render_page:
                 .catch(error => {
                     console.error('Keep-alive failed:', error);
                 });
-        }, 120000); // 2 minutes = 120,000 milliseconds
+        }, 30000); // 30 seconds = 30,000 milliseconds (faster polling for real-time balance during rapid betting)
         
         const floatingBtn = document.getElementById('floatingBtn');
         if (floatingBtn) {

@@ -19,7 +19,7 @@ $_SESSION['last_activity'] = time();
 
 // Get current balance (will use cache if available, fresh from DB if cache was invalidated)
 $userModel = new User();
-$currentBalance = $userModel->getBalance($_SESSION['user_id']);
+$currentBalance = $userModel->getBalanceFresh($_SESSION['user_id']);
 
 echo json_encode([
     'success' => true,

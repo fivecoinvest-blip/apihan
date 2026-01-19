@@ -9,8 +9,28 @@ require_once 'redis_helper.php';
 require_once 'currency_helper.php';
 require_once 'settings_helper.php';
 require_once 'rank_helper.php';
+require_once 'geo_helper.php';
+require_once 'csrf_helper.php';
 
 $cache = RedisCache::getInstance();
+
+// Handle logout - MUST be early before any HTML output
+if (isset($_GET['logout']) && isset($_GET['csrf_token'])) {
+    if (CSRF::validateToken($_GET['csrf_token'])) {
+        session_destroy();
+        header('Location: admin.php');
+        exit;
+    } else {
+        // Invalid CSRF token - redirect to prevent attack
+        $_SESSION['error'] = 'Session expired or invalid request. Please try again.';
+        header('Location: admin.php');
+        exit;
+    }
+}
+
+// Restrict admin access to PH IPs only
+// Temporarily disabled for debugging - re-enable once working
+// GeoHelper::enforceCountry('PH');
 
 // Compress and resize uploaded images (used for banners)
 function compressAndSaveImage($sourcePath, $targetDir, $baseName = 'banner', $maxWidth = 1600, $quality = 82) {
@@ -127,17 +147,30 @@ if (isset($_POST['admin_login'])) {
     $admin = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($admin && password_verify($password, $admin['password'])) {
-        $_SESSION['admin_logged_in'] = true;
-        $_SESSION['admin_id'] = $admin['id'];
-        $_SESSION['admin_username'] = $admin['username'];
-        $_SESSION['admin_role'] = $admin['role'];
-        
-        // Update last login
-        $pdo->prepare("UPDATE admin_users SET last_login = NOW() WHERE id = ?")->execute([$admin['id']]);
-        
-        // Redirect to prevent resubmission
-        header("Location: admin.php");
-        exit;
+        // If Google Authenticator (MFA) is enabled, require second step
+        $mfaEnabled = isset($admin['mfa_enabled']) ? (int)$admin['mfa_enabled'] === 1 : false;
+        $hasSecret = !empty($admin['mfa_secret'] ?? '');
+        if ($mfaEnabled && $hasSecret) {
+            // Stage pending admin until MFA verification
+            $_SESSION['pending_admin_id'] = $admin['id'];
+            $_SESSION['pending_admin_username'] = $admin['username'];
+            // Do not mark logged in yet
+            header("Location: admin_mfa_verify.php");
+            exit;
+        } else {
+            // Standard login
+            $_SESSION['admin_logged_in'] = true;
+            $_SESSION['admin_id'] = $admin['id'];
+            $_SESSION['admin_username'] = $admin['username'];
+            $_SESSION['admin_role'] = $admin['role'];
+            
+            // Update last login
+            $pdo->prepare("UPDATE admin_users SET last_login = NOW() WHERE id = ?")->execute([$admin['id']]);
+            
+            // Redirect to prevent resubmission
+            header("Location: admin.php");
+            exit;
+        }
     } else {
         $_SESSION['error'] = "Invalid username or password";
         header("Location: admin.php");
@@ -1755,16 +1788,87 @@ $transactions = $pdo->query("
 
     <div class="toast-container" id="toast-container"></div>
     <div class="header navbar navbar-expand navbar-dark" style="background:#1a1f36;border-bottom:1px solid #2d3548;">
-        <h1>Admin Dashboard</h1>
-        <div>
-            <span style="margin-right: 20px;"><?php echo htmlspecialchars($_SESSION['admin_username']); ?></span>
-            <a href="index.php">View Casino</a>
-            <a href="#" onclick="showModal('changePasswordModal'); return false;" style="margin-left: 10px;">🔑 Change Password</a>
-            <a href="?logout=1" style="margin-left: 10px;">Logout</a>
+        <h1 style="margin: 0; flex: 1;">Admin Dashboard</h1>
+        <div style="display: flex; align-items: center; gap: 20px;">
+            <span style="color: #cbd5e1;">👤 <?php echo htmlspecialchars($_SESSION['admin_username']); ?></span>
+            <a href="index.php" style="color: #10b981; text-decoration: none; font-weight: 600;">🎰 View Casino</a>
+            <a href="#" onclick="showModal('changePasswordModal'); return false;" style="color: #fbbf24; text-decoration: none; margin-left: 10px;">🔑 Change Password</a>
+            <a href="?logout=1&csrf_token=<?php echo urlencode(CSRF::getToken()); ?>" style="color: #ef4444; text-decoration: none; margin-left: 10px;">Logout</a>
         </div>
     </div>
 
-    <div class="container">
+    <div style="display: flex; min-height: calc(100vh - 70px);">
+        <!-- Sidebar Navigation -->
+        <div class="sidebar" style="width: 250px; background: #0f172a; border-right: 1px solid #2d3548; padding: 20px 0; overflow-y: auto;">
+            <nav style="display: flex; flex-direction: column; gap: 8px; padding: 0 12px;">
+                <a onclick="switchTab('games', event); event.preventDefault();" class="sidebar-item active" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; border-radius: 8px; cursor: pointer; text-decoration: none; font-weight: 600; transition: all 0.3s;">
+                    🎮 Games
+                </a>
+                <a onclick="switchTab('wallet', event); event.preventDefault();" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; cursor: pointer; text-decoration: none; font-weight: 500; transition: all 0.3s; position: relative;">
+                    💳 Wallet / Transactions
+                    <?php if ($pendingCount > 0): ?>
+                        <span style="position: absolute; right: 10px; background: #ef4444; color: white; border-radius: 20px; padding: 2px 8px; font-size: 11px; font-weight: bold;"><?php echo $pendingCount; ?></span>
+                    <?php endif; ?>
+                </a>
+                <a href="admin_wpay_logs.php" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    � Payment Logs
+                </a>
+                <a href="wpay_tools.php" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    🛠️ WPay Tools
+                </a>
+                <a href="wpay_stats.php" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    📊 WPay Stats
+                </a>
+                <a href="wpay_diagnostic.php" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    🔍 WPay Diagnostic
+                </a>
+                <a href="export_wpay_logs.php" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    💾 Export Logs
+                </a>
+                <a href="admin_login_attempts.php" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    🛡️ Login Attempts
+                </a>
+                <a href="admin_mfa_setup.php" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    🔒 Security (Google Authenticator)
+                </a>
+                <a onclick="switchTab('users', event); event.preventDefault();" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; cursor: pointer; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    👥 User Management
+                </a>
+                <a onclick="switchTab('bonuses', event); event.preventDefault();" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; cursor: pointer; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    🎁 Bonuses
+                </a>
+                
+                <hr style="border: none; border-top: 1px solid #2d3548; margin: 8px 0;">
+                
+                <div style="padding: 8px 16px; font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase;">Analytics</div>
+                <a onclick="switchTab('history', event); event.preventDefault();" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; cursor: pointer; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    📊 Betting History
+                </a>
+                <a onclick="switchTab('topplayers', event); event.preventDefault();" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; cursor: pointer; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    🏆 Top Players
+                </a>
+                <a onclick="switchTab('mostplayed', event); event.preventDefault();" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; cursor: pointer; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    🎯 Most Played Games
+                </a>
+                <a onclick="switchTab('ranks', event); event.preventDefault();" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; cursor: pointer; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    🏅 Player Ranks
+                </a>
+                
+                <hr style="border: none; border-top: 1px solid #2d3548; margin: 8px 0;">
+                
+                <div style="padding: 8px 16px; font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase;">Configuration</div>
+                <a onclick="switchTab('tool', event); event.preventDefault();" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; cursor: pointer; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    🛠️ Tools & Banners
+                </a>
+                <a onclick="switchTab('settings', event); event.preventDefault();" class="sidebar-item" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; color: #9ca3bf; border-radius: 8px; cursor: pointer; text-decoration: none; font-weight: 500; transition: all 0.3s;">
+                    ⚙️ Settings
+                </a>
+            </nav>
+        </div>
+
+        <!-- Main Content -->
+        <div style="flex: 1; overflow-y: auto; padding: 20px;">
+            <div class="container">
         <?php if (isset($success)): ?>
             <div style="background: #d1fae5; border: 1px solid #10b981; color: #065f46; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;">
                 ✅ <?php echo htmlspecialchars($success); ?>
@@ -1796,8 +1900,8 @@ $transactions = $pdo->query("
             </div>
         </div>
 
-        <!-- Tabs Navigation -->
-        <div class="tabs nav nav-pills mb-3" role="tablist">
+        <!-- Old Horizontal Tabs Navigation (Hidden) -->
+        <div class="tabs nav nav-pills mb-3" role="tablist" style="display: none;">
             <button class="tab nav-link active" role="tab" onclick="switchTab('games', this)">🎮 Games</button>
             <button class="tab nav-link" role="tab" onclick="switchTab('wallet', this)" <?php if ($pendingCount > 0): ?>style="position: relative;"<?php endif; ?>>
                 💳 Wallet
@@ -1805,6 +1909,7 @@ $transactions = $pdo->query("
                     <span id="pendingBadge" style="position: absolute; top: -5px; right: -5px; background: #ef4444; color: white; border-radius: 10px; padding: 2px 6px; font-size: 11px; font-weight: bold;"><?php echo $pendingCount; ?></span>
                 <?php endif; ?>
             </button>
+            <button class="tab nav-link" role="tab" onclick="window.location.href='admin_wpay_logs.php'">💰 Payments</button>
             <button class="tab nav-link" role="tab" onclick="switchTab('bonuses', this)">🎁 Bonuses</button>
             <button class="tab nav-link" role="tab" onclick="switchTab('users', this)">👥 Users</button>
             <button class="tab nav-link" role="tab" onclick="switchTab('history', this)">📊 Betting History</button>
@@ -3211,7 +3316,11 @@ $transactions = $pdo->query("
                 </div>
                 <div class="form-group">
                     <label>Provider</label>
-                    <input type="text" name="provider" value="JILI" required>
+                    <select name="provider" required>
+                        <option value="JILI">JILI</option>
+                        <option value="PG">PG</option>
+                        <option value="JDB">JDB</option>
+                    </select>
                 </div>
                 <div class="form-group">
                     <label>Category</label>
@@ -3259,7 +3368,11 @@ $transactions = $pdo->query("
                 </div>
                 <div class="form-group">
                     <label>Provider</label>
-                    <input type="text" name="provider" id="edit_provider" required>
+                    <select name="provider" id="edit_provider" required>
+                        <option value="JILI">JILI</option>
+                        <option value="PG">PG</option>
+                        <option value="JDB">JDB</option>
+                    </select>
                 </div>
                 <div class="form-group">
                     <label>Category</label>
@@ -3713,12 +3826,12 @@ $transactions = $pdo->query("
             showModal('editBalanceModal');
         }
         
-        function viewUserHistory(userId, username) {
+        function viewUserHistory(userId, username, page = 1) {
             document.getElementById('history_username').textContent = 'User: ' + username;
             showModal('userHistoryModal');
             
             // Fetch user transaction history via AJAX
-            fetch('get_user_history.php?user_id=' + userId)
+            fetch('get_user_history.php?user_id=' + userId + '&page=' + page)
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
@@ -3726,22 +3839,58 @@ $transactions = $pdo->query("
                             '<th>Date/Time</th><th>Type</th><th>Game</th><th>Amount</th><th>Balance Before</th><th>Balance After</th>' +
                             '</tr></thead><tbody>';
                         
-                        data.transactions.forEach(t => {
-                            const badgeClass = t.type === 'bet' ? 'badge-warning' : (t.type === 'win' ? 'badge-success' : 'badge-info');
-                            const currency = t.currency || 'PHP';
-                            const symbol = currency === 'PHP' ? '₱' : currency + ' ';
-                            const gameName = t.game_name || 'N/A';
-                            html += `<tr>
-                                <td>${t.created_at}</td>
-                                <td><span class="badge ${badgeClass}">${t.type.toUpperCase()}</span></td>
-                                <td><small>${gameName}</small></td>
-                                <td><strong>${symbol}${parseFloat(t.amount).toFixed(2)}</strong></td>
-                                <td>${symbol}${parseFloat(t.balance_before).toFixed(2)}</td>
-                                <td>${symbol}${parseFloat(t.balance_after).toFixed(2)}</td>
-                            </tr>`;
-                        });
+                        if (data.transactions.length === 0) {
+                            html += '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #999;">No transactions found</td></tr>';
+                        } else {
+                            data.transactions.forEach(t => {
+                                const badgeClass = t.type === 'bet' ? 'badge-warning' : (t.type === 'win' ? 'badge-success' : 'badge-info');
+                                const currency = t.currency || 'PHP';
+                                const symbol = currency === 'PHP' ? '₱' : currency + ' ';
+                                const gameName = t.game_name || 'N/A';
+                                html += `<tr>
+                                    <td>${t.created_at}</td>
+                                    <td><span class="badge ${badgeClass}">${t.type.toUpperCase()}</span></td>
+                                    <td><small>${gameName}</small></td>
+                                    <td><strong>${symbol}${parseFloat(t.amount).toFixed(2)}</strong></td>
+                                    <td>${symbol}${parseFloat(t.balance_before).toFixed(2)}</td>
+                                    <td>${symbol}${parseFloat(t.balance_after).toFixed(2)}</td>
+                                </tr>`;
+                            });
+                        }
                         
                         html += '</tbody></table>';
+                        
+                        // Add pagination controls
+                        if (data.pagination && data.pagination.total_pages > 1) {
+                            html += '<div style="margin-top: 20px; text-align: center; display: flex; align-items: center; justify-content: center; gap: 10px;">';
+                            html += `<span style="color: #64748b; font-size: 14px;">Page ${data.pagination.current_page} of ${data.pagination.total_pages} (${data.pagination.total_records} records)</span>`;
+                            html += '<div style="display: flex; gap: 5px;">';
+                            
+                            // Previous button
+                            if (data.pagination.current_page > 1) {
+                                html += `<button class="btn btn-small" onclick="viewUserHistory(${userId}, '${username}', ${data.pagination.current_page - 1})">← Previous</button>`;
+                            }
+                            
+                            // Page numbers (show 5 pages max)
+                            let startPage = Math.max(1, data.pagination.current_page - 2);
+                            let endPage = Math.min(data.pagination.total_pages, startPage + 4);
+                            startPage = Math.max(1, endPage - 4);
+                            
+                            for (let i = startPage; i <= endPage; i++) {
+                                const activeStyle = i === data.pagination.current_page ? 
+                                    'background: linear-gradient(135deg, #667eea, #764ba2); color: white;' : 
+                                    'background: #1e293b; color: #cbd5e1;';
+                                html += `<button class="btn btn-small" style="${activeStyle}" onclick="viewUserHistory(${userId}, '${username}', ${i})">${i}</button>`;
+                            }
+                            
+                            // Next button
+                            if (data.pagination.current_page < data.pagination.total_pages) {
+                                html += `<button class="btn btn-small" onclick="viewUserHistory(${userId}, '${username}', ${data.pagination.current_page + 1})">Next →</button>`;
+                            }
+                            
+                            html += '</div></div>';
+                        }
+                        
                         document.getElementById('user_history_content').innerHTML = html;
                     } else {
                         document.getElementById('user_history_content').innerHTML = '<p>No transaction history found.</p>';
@@ -4005,16 +4154,53 @@ $transactions = $pdo->query("
             
             showModal('editBonusModal');
         }
+        
+        // Update sidebar active state when switching tabs
+        const originalSwitchTab = window.switchTab;
+        window.switchTab = function(tabName, element) {
+            // Update sidebar highlighting
+            document.querySelectorAll('.sidebar-item').forEach(item => item.classList.remove('active'));
+            if (element && element.target) {
+                element.target.closest('.sidebar-item').classList.add('active');
+            }
+            originalSwitchTab(tabName, element);
+        };
+        
+        // Add styles for sidebar
+        const style = document.createElement('style');
+        style.textContent = `
+            .sidebar-item:hover {
+                background: rgba(102, 126, 234, 0.15);
+                color: #cbd5e1;
+            }
+            .sidebar-item.active {
+                background: linear-gradient(135deg, #667eea, #764ba2) !important;
+                color: white !important;
+            }
+            .sidebar {
+                scrollbar-width: thin;
+                scrollbar-color: #2d3548 transparent;
+            }
+            .sidebar::-webkit-scrollbar {
+                width: 6px;
+            }
+            .sidebar::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            .sidebar::-webkit-scrollbar-thumb {
+                background: #2d3548;
+                border-radius: 3px;
+            }
+            .sidebar::-webkit-scrollbar-thumb:hover {
+                background: #475569;
+            }
+        `;
+        document.head.appendChild(style);
      </script>
      <!-- AdminLTE + Bootstrap JS (CDN) -->
      <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
      <script src="https://cdn.jsdelivr.net/npm/admin-lte@4/dist/js/adminlte.min.js"></script>
+        </div>
+    </div>
  </body>
  </html>
-<?php
-if (isset($_GET['logout'])) {
-    session_destroy();
-    header('Location: admin.php');
-    exit;
-}
-?>

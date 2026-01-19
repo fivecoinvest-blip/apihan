@@ -13,6 +13,9 @@ require_once 'config.php';
 require_once 'db_helper.php';
 
 $userId = $_GET['user_id'] ?? null;
+$page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
+$perPage = 50;
+$offset = ($page - 1) * $perPage;
 
 if (!$userId) {
     echo json_encode(['success' => false, 'error' => 'User ID required']);
@@ -23,6 +26,13 @@ try {
     $db = Database::getInstance();
     $pdo = $db->getConnection();
     
+    // Get total count
+    $countStmt = $pdo->prepare("SELECT COUNT(*) FROM transactions WHERE user_id = ?");
+    $countStmt->execute([$userId]);
+    $totalRecords = $countStmt->fetchColumn();
+    $totalPages = ceil($totalRecords / $perPage);
+    
+    // Get paginated results
     $stmt = $pdo->prepare("
         SELECT 
             t.type, 
@@ -39,15 +49,21 @@ try {
         LEFT JOIN games g ON t.game_uid = g.game_uid
         WHERE t.user_id = ? 
         ORDER BY t.created_at DESC 
-        LIMIT 50
+        LIMIT ? OFFSET ?
     ");
     
-    $stmt->execute([$userId]);
+    $stmt->execute([$userId, $perPage, $offset]);
     $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     echo json_encode([
         'success' => true,
-        'transactions' => $transactions
+        'transactions' => $transactions,
+        'pagination' => [
+            'current_page' => $page,
+            'total_pages' => $totalPages,
+            'total_records' => $totalRecords,
+            'per_page' => $perPage
+        ]
     ]);
     
 } catch (Exception $e) {

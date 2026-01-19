@@ -1,96 +1,92 @@
 <?php
 /**
- * Evolution Games API Test - Test Multiple Games
- * Disables Evolution games if "GAME NOT FOUND" error is detected
+ * Test Evolution Live Game Launch
+ * Tests API integration before adding to database
  */
 
-require_once "/var/www/html/config.php";
-require_once "/var/www/html/api_request_builder.php";
-require_once "/var/www/html/db_helper.php";
+require_once 'session_config.php';
 
-echo "=== EVOLUTION GAMES COMPREHENSIVE API TEST ===\n";
-echo "Time: " . date("Y-m-d H:i:s") . "\n\n";
-
-try {
-    $db = Database::getInstance();
-    $pdo = $db->getConnection();
-    
-    // Get multiple Evolution games to test
-    $stmt = $pdo->query("SELECT id, game_uid, name FROM games WHERE provider='Evolution' LIMIT 5");
-    $games = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    if (empty($games)) {
-        echo "❌ No Evolution games found in database\n";
-        exit(1);
-    }
-    
-    echo "Testing " . count($games) . " Evolution games...\n\n";
-    
-    $successCount = 0;
-    $failureCount = 0;
-    $gameNotFoundCount = 0;
-    $lastError = "";
-    
-    foreach ($games as $game) {
-        echo "Testing: {$game['name']} (UID: {$game['game_uid']})...\n";
-        
-        $params = createGameLaunchRequest(
-            userId: "999",
-            balance: "1000",
-            gameUid: $game['game_uid']
-        );
-        
-        $result = sendLaunchGameRequest($params);
-        
-        if ($result['success']) {
-            echo "  ✅ SUCCESS\n";
-            $successCount++;
-        } else {
-            $error = $result['error'] ?? "";
-            echo "  ❌ FAILED: {$error}\n";
-            $failureCount++;
-            $lastError = $error;
-            
-            if (stripos($error, "game not found") !== false) {
-                $gameNotFoundCount++;
-            }
-        }
-    }
-    
-    echo "\n=== RESULTS ===\n";
-    echo "Success: {$successCount}\n";
-    echo "Failed: {$failureCount}\n";
-    echo "Game Not Found Errors: {$gameNotFoundCount}\n\n";
-    
-    // If any "GAME NOT FOUND" errors detected, disable all Evolution games
-    if ($gameNotFoundCount > 0) {
-        echo "⚠️  GAME NOT FOUND ERRORS DETECTED!\n";
-        echo "🔴 DISABLING ALL EVOLUTION GAMES...\n\n";
-        
-        $updateStmt = $pdo->prepare("UPDATE games SET is_active=0 WHERE provider='Evolution'");
-        $updateStmt->execute();
-        $count = $updateStmt->rowCount();
-        
-        echo "✓ {$count} Evolution games have been DISABLED\n";
-        echo "Status: EVOLUTION PROVIDER NOT SUPPORTED BY API\n";
-        
-        // Log this action
-        @mkdir("/var/www/html/logs", 0755, true);
-        $logMsg = date("Y-m-d H:i:s") . " | EVOLUTION DISABLED | Game Not Found: {$gameNotFoundCount}/{$failureCount} games | Disabled {$count} total games\n";
-        file_put_contents("/var/www/html/logs/evolution_status.log", $logMsg, FILE_APPEND);
-        
-        exit(1);
-    } else if ($successCount > 0) {
-        echo "✅ Evolution games are working!\n";
-        exit(0);
-    } else {
-        echo "⚠️  All tests failed but no GAME NOT FOUND errors\n";
-        echo "Error: {$lastError}\n";
-        exit(1);
-    }
-    
-} catch (Exception $e) {
-    echo "❌ ERROR: " . $e->getMessage() . "\n";
-    exit(2);
+if (!isset($_SESSION['user_id'])) {
+    die('Please login first: <a href="login.php">Login</a>');
 }
+
+require_once 'config.php';
+require_once 'db_helper.php';
+require_once 'api_request_builder.php';
+require_once 'currency_helper.php';
+
+$userModel = new User();
+$currentUser = $userModel->getById($_SESSION['user_id']);
+$balance = $userModel->getBalanceFresh($_SESSION['user_id']);
+$balanceToSend = $balance;
+$userCurrency = isset($_GET['currency']) && is_string($_GET['currency'])
+    ? strtoupper(trim($_GET['currency']))
+    : 'PHP';
+$currencySymbolMap = [
+    'INR' => '₹',
+    'PHP' => '₱',
+    'USD' => '$',
+];
+$currencySymbol = $currencySymbolMap[$userCurrency] ?? '';
+$userId = (string)$_SESSION['user_id'];
+
+// Use passed currency in payload
+$payloadCurrency = $userCurrency;
+
+// Always use session user
+$payloadUserId = $userId;
+
+// Test Evolution Live Lobby
+$gameId = isset($_GET['game_id']) && ctype_digit($_GET['game_id'])
+    ? $_GET['game_id']
+    : '8205';
+$gameName = 'Evolution Live Lobby';
+
+echo "<h2>Testing Evolution Live Game Launch</h2>";
+echo "<p><strong>Game ID:</strong> {$gameId}</p>";
+echo "<p><strong>Game Name:</strong> {$gameName}</p>";
+echo "<p><strong>User ID:</strong> {$userId}</p>";
+echo "<p><strong>Balance:</strong> " . ($currencySymbol ?: $userCurrency . ' ') . number_format($balance, 2) . "</p>";
+echo "<p><strong>Payload Currency:</strong> {$payloadCurrency}</p>";echo "<hr>";
+
+// Create launch request
+$params = createGameLaunchRequest(
+    userId: $payloadUserId,
+    balance: $balanceToSend,
+    gameUid: $gameId,
+    currencyCode: $payloadCurrency,
+    language: 'en'
+);
+
+echo "<h3>Request Parameters:</h3>";
+echo "<pre>" . print_r($params, true) . "</pre>";
+echo "<hr>";
+
+// Send request
+$result = sendLaunchGameRequest($params);
+
+echo "<h3>API Response:</h3>";
+echo "<pre>" . print_r($result, true) . "</pre>";
+echo "<hr>";
+
+if ($result['success']) {
+    echo "<h3 style='color: green;'>✅ SUCCESS!</h3>";
+    echo "<p>Game URL generated successfully.</p>";
+    echo "<p><a href='{$result['game_url']}' target='_blank' style='padding: 10px 20px; background: #22c55e; color: white; text-decoration: none; border-radius: 8px;'>Launch Game in New Tab</a></p>";
+    echo "<hr>";
+    echo "<h4>Ready to add to database?</h4>";
+    echo "<p>If the game loads correctly, you can add it to the games table.</p>";
+} else {
+    echo "<h3 style='color: red;'>❌ FAILED</h3>";
+    echo "<p><strong>Error:</strong> {$result['error']}</p>";
+    if (isset($result['error_code'])) {
+        echo "<p><strong>Error Code:</strong> {$result['error_code']}</p>";
+    }
+    if (isset($result['http_code'])) {
+        echo "<p><strong>HTTP Code:</strong> {$result['http_code']}</p>";
+    }
+}
+
+echo "<br><br>";
+echo "<a href='index.php'>← Back to Lobby</a>";
 ?>

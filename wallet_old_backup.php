@@ -1,0 +1,1223 @@
+<?php
+require_once 'session_config.php';
+require_once 'config.php';
+require_once 'db_helper.php';
+require_once 'redis_helper.php';
+require_once 'currency_helper.php';
+require_once 'settings_helper.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit;
+}
+
+// Load site settings
+$siteSettings = SiteSettings::load();
+$casinoName = $siteSettings['casino_name'] ?? 'Casino PHP';
+$themeColor = $siteSettings['theme_color'] ?? '#6366f1';
+$allowedMethods = json_decode($siteSettings['allowed_methods'] ?? '[]', true);
+if (empty($allowedMethods)) {
+    $allowedMethods = ['bank','gcash','paymaya','crypto'];
+}
+
+$userModel = new User();
+$currentUser = $userModel->getById($_SESSION['user_id']);
+$balance = $userModel->getBalance($_SESSION['user_id']);
+$userCurrency = $currentUser['currency'] ?? 'PHP';
+$username = $currentUser['username'] ?? '';
+
+$db = Database::getInstance();
+$pdo = $db->getConnection();
+
+// Ensure withdrawal preferences table exists (idempotent)
+$pdo->exec("CREATE TABLE IF NOT EXISTS user_withdrawal_preferences (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    method ENUM('bank','gcash','paymaya','crypto') NOT NULL,
+    account_details TEXT NULL,
+    crypto_network VARCHAR(20) NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_user_method (user_id, method)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+// Load saved withdrawal preferences
+$prefStmt = $pdo->prepare("SELECT method, account_details, crypto_network FROM user_withdrawal_preferences WHERE user_id = ?");
+$prefStmt->execute([$_SESSION['user_id']]);
+$withdrawPrefs = [];
+foreach ($prefStmt->fetchAll(PDO::FETCH_ASSOC) as $pref) {
+    $withdrawPrefs[$pref['method']] = [
+        'account' => $pref['account_details'] ?? '',
+        'network' => $pref['crypto_network'] ?? ''
+    ];
+}
+
+// Handle success/error messages
+$success = isset($_SESSION['success']) ? $_SESSION['success'] : '';
+$error = isset($_SESSION['error']) ? $_SESSION['error'] : '';
+unset($_SESSION['success'], $_SESSION['error']);
+
+// Get active tab from URL parameter
+$activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'deposit';
+
+// Handle deposit request
+if (isset($_POST['deposit'])) {
+    $amount = floatval($_POST['amount']);
+    $method = $_POST['method'] ?? 'bank';
+    $referenceNumber = trim($_POST['reference_number'] ?? '');
+    
+    if (!in_array($method, $allowedMethods)) {
+        $_SESSION['error'] = 'This deposit method is currently disabled by admin.';
+        header('Location: wallet.php');
+        exit;
+    }
+    
+    if ($amount < 100) {
+        $_SESSION['error'] = 'Minimum deposit amount is ' . formatCurrency(100, $userCurrency);
+    } else {
+        // Handle proof of payment upload
+        $proofPath = null;
+        if (isset($_FILES['proof_of_payment']) && $_FILES['proof_of_payment']['error'] === 0) {
+            $uploadDir = 'uploads/deposits/';
+            if (!is_dir($uploadDir)) {
+                mkdir($uploadDir, 0755, true);
+            }
+            
+            $allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+            $fileType = $_FILES['proof_of_payment']['type'];
+            
+            if (in_array($fileType, $allowedTypes)) {
+                $extension = pathinfo($_FILES['proof_of_payment']['name'], PATHINFO_EXTENSION);
+                $filename = 'deposit_' . $_SESSION['user_id'] . '_' . time() . '.' . $extension;
+                $uploadPath = $uploadDir . $filename;
+                
+                if (move_uploaded_file($_FILES['proof_of_payment']['tmp_name'], $uploadPath)) {
+                    $proofPath = $uploadPath;
+                }
+            }
+        }
+        
+        // Create pending deposit transaction with proof
+        $description = "Deposit request via {$method}";
+        if ($referenceNumber) {
+            $description .= " (Ref: {$referenceNumber})";
+        }
+        
+        $stmt = $pdo->prepare("
+            INSERT INTO transactions (user_id, type, amount, balance_before, balance_after, description, status, receipt_image, created_at) 
+            VALUES (?, 'deposit', ?, ?, ?, ?, 'pending', ?, NOW())
+        ");
+        $stmt->execute([
+            $_SESSION['user_id'],
+            $amount,
+            $balance,
+            $balance,
+            $description,
+            $proofPath
+        ]);
+        
+        $_SESSION['success'] = 'Deposit request submitted with proof of payment! Please wait for admin approval.';
+    }
+    
+    header('Location: wallet.php');
+    exit;
+}
+
+// Handle withdrawal request
+if (isset($_POST['withdraw'])) {
+    $amount = floatval($_POST['amount']);
+    $method = $_POST['method'] ?? 'bank';
+    if (!in_array($method, $allowedMethods)) {
+        $_SESSION['error'] = 'This withdrawal method is currently disabled by admin.';
+        header('Location: wallet.php?tab=withdraw');
+        exit;
+    }
+    $accountInput = trim($_POST['account'] ?? '');
+    $cryptoNetwork = strtoupper(trim($_POST['crypto_network'] ?? ''));
+    $cryptoAddress = trim($_POST['crypto_address'] ?? '');
+    
+    // Validation
+    if ($amount < 100) {
+        $_SESSION['error'] = 'Minimum withdrawal amount is ' . formatCurrency(100, $userCurrency);
+    } else {
+        $error = null;
+        $charge = 0;
+        $finalAmount = $amount;
+        $description = "";
+        
+        // Method-specific validation
+        if ($method === 'bank') {
+            $account = $accountInput;
+            if (empty($account)) {
+                $error = 'Please provide bank account details for withdrawal';
+            }
+            // Bank transfer has 15% charge
+            $charge = $amount * 0.15;
+            $finalAmount = $amount + $charge;
+            
+            if ($finalAmount > $balance) {
+                $error = 'Insufficient balance. Bank transfer requires 15% fee. Total needed: ' . formatCurrency($finalAmount, $userCurrency);
+            } else {
+                $description = "Withdrawal: " . formatCurrency($amount, $userCurrency) . " + 15% fee (" . formatCurrency($charge, $userCurrency) . ") = " . formatCurrency($finalAmount, $userCurrency) . " to {$account} via Bank Transfer";
+            }
+        } elseif (in_array($method, ['gcash', 'paymaya'])) {
+            // GCash/PayMaya must match registered phone number
+            $account = $currentUser['phone']; // enforce registered phone
+            $cleanInput = preg_replace('/[^0-9]/', '', $account);
+            $cleanRegistered = preg_replace('/[^0-9]/', '', $currentUser['phone']);
+            
+            if ($cleanInput !== $cleanRegistered) {
+                $error = ucfirst($method) . ' number must match your registered phone number: ' . $currentUser['phone'];
+            } elseif ($amount > $balance) {
+                $error = 'Insufficient balance for withdrawal';
+            } else {
+                $description = "Withdrawal: " . formatCurrency($amount, $userCurrency) . " to {$account} via " . ucfirst($method) . " (Free)";
+            }
+        } elseif ($method === 'crypto') {
+            $allowedNetworks = ['TRC20', 'BEP20'];
+            if (empty($cryptoNetwork) || !in_array($cryptoNetwork, $allowedNetworks)) {
+                $error = 'Please select a valid USDT network (TRC20 or BEP20)';
+            } elseif (empty($cryptoAddress)) {
+                $error = 'Please provide your USDT wallet address';
+            } else {
+                $charge = 50; // flat network fee in PHP
+                $finalAmount = $amount + $charge;
+                if ($finalAmount > $balance) {
+                    $error = 'Insufficient balance. Total needed including network fee: ' . formatCurrency($finalAmount, $userCurrency);
+                } else {
+                    $account = $cryptoAddress; // store the address as account details
+                    $description = "Withdrawal: " . formatCurrency($amount, $userCurrency) . " + network fee " . formatCurrency($charge, $userCurrency) . " via USDT {$cryptoNetwork} to {$account}";
+                }
+            }
+        }
+        
+        if ($error) {
+            $_SESSION['error'] = $error;
+        } else {
+            // Create pending withdrawal transaction
+            $stmt = $pdo->prepare("
+                INSERT INTO transactions (user_id, type, amount, balance_before, balance_after, description, status, created_at) 
+                VALUES (?, 'withdrawal', ?, ?, ?, ?, 'pending', NOW())
+            ");
+            $stmt->execute([
+                $_SESSION['user_id'],
+                $finalAmount, // Store the final amount including charges
+                $balance,
+                $balance,
+                $description
+            ]);
+            
+            $transactionId = $pdo->lastInsertId();
+            
+            // Send Telegram notification (non-blocking)
+            try {
+                if (file_exists('telegram_bot.php')) {
+                    require_once 'telegram_bot.php';
+                    $telegramBot = new TelegramBot();
+                    $telegramBot->notifyPendingWithdrawal($transactionId);
+                }
+            } catch (Exception $e) {
+                // Telegram notification failed but withdrawal was still created
+                // Log the error but don't block the user's withdrawal
+                error_log("Telegram bot error: " . $e->getMessage());
+            }
+            
+            // Save withdrawal preference for this method
+            $saveStmt = $pdo->prepare("INSERT INTO user_withdrawal_preferences (user_id, method, account_details, crypto_network) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE account_details = VALUES(account_details), crypto_network = VALUES(crypto_network)");
+            if ($method === 'crypto') {
+                $saveStmt->execute([$_SESSION['user_id'], $method, $account, $cryptoNetwork]);
+            } elseif (in_array($method, ['gcash', 'paymaya'])) {
+                $saveStmt->execute([$_SESSION['user_id'], $method, $currentUser['phone'], null]);
+            } else { // bank
+                $saveStmt->execute([$_SESSION['user_id'], $method, $account, null]);
+            }
+            
+            $_SESSION['success'] = 'Withdrawal request submitted! Please wait for admin processing.';
+        }
+    }
+    
+    header('Location: wallet.php');
+    exit;
+}
+
+// Get transaction history (last 50)
+$stmt = $pdo->prepare("
+    SELECT * FROM transactions 
+    WHERE user_id = ? 
+    ORDER BY created_at DESC 
+    LIMIT 50
+");
+$stmt->execute([$_SESSION['user_id']]);
+$transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Calculate statistics
+$stmt = $pdo->prepare("
+    SELECT 
+        SUM(CASE WHEN type = 'deposit' AND status = 'completed' THEN amount ELSE 0 END) as total_deposits,
+        SUM(CASE WHEN type = 'withdrawal' AND status = 'completed' THEN amount ELSE 0 END) as total_withdrawals,
+        SUM(CASE WHEN type = 'bet' THEN amount ELSE 0 END) as total_bets,
+        SUM(CASE WHEN type = 'win' THEN amount ELSE 0 END) as total_wins
+    FROM transactions 
+    WHERE user_id = ?
+");
+$stmt->execute([$_SESSION['user_id']]);
+$stats = $stmt->fetch(PDO::FETCH_ASSOC);
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?php echo htmlspecialchars($casinoName); ?> - Wallet</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #fff;
+            min-height: 100vh;
+        }
+        
+        /* Header */
+        .header {
+            background: #1e293b;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .logo {
+            font-size: 24px;
+            font-weight: bold;
+            color: #fff;
+            text-decoration: none;
+        }
+        
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            position: relative;
+        }
+        
+        .balance-wrapper {
+            position: relative;
+        }
+        
+        .balance {
+            background: linear-gradient(135deg, #10b981, #059669);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            user-select: none;
+        }
+        
+        .balance:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+        }
+        
+        .balance-dropdown {
+            position: absolute;
+            top: calc(100% + 10px);
+            right: 0;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            min-width: 200px;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-10px);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 1000;
+            max-height: calc(100vh - 100px);
+            overflow-y: auto;
+        }
+        
+        .balance-dropdown.active {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+        
+        .balance-dropdown a {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            padding: 14px 18px;
+            color: #e2e8f0;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            font-weight: 500;
+            font-size: 14px;
+            border-left: 3px solid transparent;
+        }
+        
+        .balance-dropdown a:first-child {
+            border-radius: 11px 11px 0 0;
+        }
+        
+        .balance-dropdown a:last-child {
+            border-radius: 0 0 11px 11px;
+        }
+        
+        .balance-dropdown a:hover {
+            background: #334155;
+            border-left-color: #10b981;
+            color: #fff;
+            padding-left: 22px;
+        }
+        
+        .balance-dropdown-divider {
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #334155 20%, #334155 80%, transparent);
+            margin: 6px 0;
+        }
+        
+
+        
+        .auth-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.2s;
+            border: none;
+            cursor: pointer;
+        }
+        
+        .btn-primary {
+            background: #2563eb;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #1d4ed8;
+        }
+        
+        .btn-secondary {
+            background: transparent;
+            color: #9ca3af;
+            border: 1px solid #374151;
+        }
+        
+        .btn-secondary:hover {
+            background: #374151;
+            color: #fff;
+        }
+        
+        .username {
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        
+        .balance-display {
+            background: linear-gradient(135deg, #10b981, #059669);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 18px;
+        }
+        
+        /* Container */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            overflow-x: auto;
+            padding-bottom: 10px;
+        }
+        
+        .tab {
+            padding: 12px 24px;
+            background: #1e293b;
+            border: none;
+            border-radius: 8px;
+            color: #94a3b8;
+            font-size: 15px;
+            cursor: pointer;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        
+        .tab.active {
+            background: linear-gradient(135deg, <?php echo $themeColor; ?>, #4f46e5);
+            color: #fff;
+        }
+        
+        .tab:hover {
+            background: #334155;
+        }
+        
+        /* Tab Content */
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        /* Cards */
+        .card {
+            background: #1e293b;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+        
+        .card-title {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #fff;
+        }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #1e293b, #334155);
+            padding: 20px;
+            border-radius: 12px;
+            border-left: 4px solid;
+        }
+        
+        .stat-card.deposits { border-color: #10b981; }
+        .stat-card.withdrawals { border-color: #f59e0b; }
+        .stat-card.bets { border-color: #ef4444; }
+        .stat-card.wins { border-color: #8b5cf6; }
+        
+        .stat-label {
+            color: #94a3b8;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        
+        /* Forms */
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #cbd5e1;
+            font-size: 14px;
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 12px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #fff;
+            font-size: 15px;
+        }
+        
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: <?php echo $themeColor; ?>;
+        }
+        
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        .btn {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, <?php echo $themeColor; ?>, #4f46e5);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+            width: 100%;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
+        /* Alerts */
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .alert-success {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid #10b981;
+            color: #10b981;
+        }
+        
+        .alert-error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid #ef4444;
+            color: #ef4444;
+        }
+        
+        /* Transaction Table */
+        .transaction-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .transaction-table th,
+        .transaction-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #334155;
+        }
+        
+        .transaction-table th {
+            color: #94a3b8;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        .transaction-table tbody tr:hover {
+            background: #334155;
+        }
+        
+        .type-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .type-deposit { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+        .type-withdrawal { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+        .type-bet { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+        .type-win { background: rgba(139, 92, 246, 0.2); color: #8b5cf6; }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-completed { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+        .status-pending { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+        .status-failed { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+        
+        .amount-positive { color: #10b981; }
+        .amount-negative { color: #ef4444; }
+        
+        /* Back Link */
+        .back-link {
+            display: inline-block;
+            color: #94a3b8;
+            text-decoration: none;
+            margin-bottom: 20px;
+            transition: color 0.3s;
+        }
+        
+        .back-link:hover {
+            color: #fff;
+        }
+        
+        /* Mobile Responsive */
+        @media (max-width: 768px) {
+            .header {
+                padding: 12px 15px;
+            }
+            
+            .logo {
+                font-size: 20px;
+            }
+            
+            .balance {
+                padding: 6px 12px;
+                font-size: 14px;
+            }
+            
+            .balance-dropdown {
+                right: 0;
+                min-width: 180px;
+                max-width: calc(100vw - 30px);
+            }
+            
+            .balance-dropdown a {
+                padding: 12px 16px;
+                font-size: 13px;
+            }
+            
+            .balance-dropdown a:hover {
+                padding-left: 20px;
+            }
+            
+            .auth-buttons:not(.mobile-menu) {
+                display: none;
+            }
+            
+
+            
+            .user-info {
+                gap: 10px;
+            }
+            
+            .container {
+                padding: 15px;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .transaction-table {
+                font-size: 14px;
+            }
+            
+            .transaction-table th,
+            .transaction-table td {
+                padding: 8px;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .logo {
+                font-size: 18px;
+            }
+            
+            .balance {
+                font-size: 13px;
+                padding: 5px 10px;
+            }
+            
+            .balance-dropdown {
+                min-width: 160px;
+            }
+            
+            .balance-dropdown a {
+                padding: 10px 12px;
+                font-size: 14px;
+            }
+        }
+    </style>
+    
+    <?php
+    // Load header scripts from settings
+    if (!empty($siteSettings['header_scripts'])) {
+        echo $siteSettings['header_scripts'];
+    }
+    ?>
+</head>
+<body>
+    <div class="header">
+        <a href="index.php" class="logo">🎰 <?php echo htmlspecialchars($casinoName); ?></a>
+        <div class="user-info">
+            <div class="balance-wrapper">
+                <div class="balance" id="balance-trigger" onclick="toggleBalanceDropdown()">
+                    💰 <?php echo formatCurrency($balance, $userCurrency); ?>
+                </div>
+                <div class="balance-dropdown" id="balance-dropdown">
+                    <a href="wallet.php?tab=deposit" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600;">
+                        <span>⚡ Auto Deposit</span>
+                    </a>
+                    <a href="wallet.php?tab=withdrawal" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; font-weight: 600;">
+                        <span>⚡ Auto Withdrawal</span>
+                    </a>
+                    <div class="balance-dropdown-divider"></div>
+                    <a href="profile.php">
+                        <span>Profile</span>
+                    </a>
+                    <a href="wallet.php">
+                        <span>Wallet</span>
+                    </a>
+                    <a href="logout.php">
+                        <span>Logout</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container">
+        <a href="index.php" class="back-link">← Back to Games</a>
+        
+        <?php if ($success): ?>
+            <div class="alert alert-success"><?php echo htmlspecialchars($success); ?></div>
+        <?php endif; ?>
+        
+        <?php if ($error): ?>
+            <div class="alert alert-error"><?php echo htmlspecialchars($error); ?></div>
+        <?php endif; ?>
+        
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab <?php echo $activeTab === 'deposit' ? 'active' : ''; ?>" onclick="showTab('deposit')">💰 Deposit</button>
+            <button class="tab <?php echo $activeTab === 'withdraw' ? 'active' : ''; ?>" onclick="showTab('withdraw')">💸 Withdraw</button>
+            <button class="tab <?php echo $activeTab === 'history' ? 'active' : ''; ?>" onclick="showTab('history')">📜 History</button>
+        </div>
+        
+        <!-- Deposit Tab -->
+        <div id="deposit-tab" class="tab-content <?php echo $activeTab === 'deposit' ? 'active' : ''; ?>">
+            <div class="card">
+                <h2 class="card-title">Deposit Funds</h2>
+                <form method="POST" enctype="multipart/form-data" id="depositForm">
+                    <div class="form-group">
+                        <label>Amount (<?php echo $userCurrency; ?>)</label>
+                        <input type="number" name="amount" min="100" step="0.01" required 
+                               placeholder="Minimum: <?php echo formatCurrency(100, $userCurrency); ?>">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Payment Method</label>
+                        <select name="method" id="paymentMethod" required onchange="showPaymentDetails(this.value)">
+                            <option value="">Select payment method</option>
+                            <?php if (in_array('gcash', $allowedMethods)): ?>
+                                <option value="gcash">GCash</option>
+                            <?php endif; ?>
+                            <?php if (in_array('paymaya', $allowedMethods)): ?>
+                                <option value="paymaya">Maya (PayMaya)</option>
+                            <?php endif; ?>
+                            <?php if (in_array('crypto', $allowedMethods)): ?>
+                                <option value="crypto">Cryptocurrency</option>
+                            <?php endif; ?>
+                            <?php if (in_array('bank', $allowedMethods)): ?>
+                                <option value="bank">Bank Transfer</option>
+                            <?php endif; ?>
+                        </select>
+                    </div>
+                    
+                    <!-- Payment Details Display -->
+                    <div id="paymentDetailsGcash" class="payment-details" style="display: none; background: #eef6ff; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #3b82f6; font-size: 14px; color: #0f172a;">
+                        <h3 style="margin-top: 0; color: #1e3a8a; font-size: 16px; font-weight: 700;">💳 Send Payment to GCash</h3>
+                        <?php if (!empty($siteSettings['gcash_number'])): ?>
+                            <p style="margin: 6px 0; color: #0f172a;"><strong>GCash Number:</strong> 
+                                <span style="font-size: 18px; color: #0f172a; font-weight: 700; letter-spacing: 0.3px;"><?php echo htmlspecialchars($siteSettings['gcash_number']); ?></span>
+                                <button type="button" class="copy-btn" onclick="copyText('<?php echo addslashes($siteSettings['gcash_number']); ?>')">Copy</button>
+                            </p>
+                        <?php endif; ?>
+                        <?php if (!empty($siteSettings['gcash_name'])): ?>
+                            <p style="margin: 6px 0; color: #0f172a;"><strong>Account Name:</strong> 
+                                <span style="font-weight: 600; color: #0f172a;"><?php echo htmlspecialchars($siteSettings['gcash_name']); ?></span>
+                            </p>
+                        <?php endif; ?>
+                        <p style="margin: 10px 0 0 0; font-size: 13px; color: #0f172a; opacity: 0.9;">Send the exact amount to the number above, then upload proof below.</p>
+                    </div>
+                    
+                    <div id="paymentDetailsMaya" class="payment-details" style="display: none; background: #effcf6; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #10b981; font-size: 14px; color: #0f172a;">
+                        <h3 style="margin-top: 0; color: #065f46; font-size: 16px; font-weight: 700;">💚 Send Payment to Maya</h3>
+                        <?php if (!empty($siteSettings['maya_number'])): ?>
+                            <p style="margin: 6px 0; color: #0f172a;"><strong>Maya Number:</strong> 
+                                <span style="font-size: 18px; color: #0f172a; font-weight: 700; letter-spacing: 0.3px;"><?php echo htmlspecialchars($siteSettings['maya_number']); ?></span>
+                                <button type="button" class="copy-btn" onclick="copyText('<?php echo addslashes($siteSettings['maya_number']); ?>')">Copy</button>
+                            </p>
+                        <?php endif; ?>
+                        <?php if (!empty($siteSettings['maya_name'])): ?>
+                            <p style="margin: 6px 0; color: #0f172a;"><strong>Account Name:</strong> 
+                                <span style="font-weight: 600; color: #0f172a;"><?php echo htmlspecialchars($siteSettings['maya_name']); ?></span>
+                            </p>
+                        <?php endif; ?>
+                        <p style="margin: 10px 0 0 0; font-size: 13px; color: #0f172a; opacity: 0.9;">Send the exact amount to the number above, then upload proof below.</p>
+                    </div>
+                    
+                    <div id="paymentDetailsCrypto" class="payment-details" style="display: none; background: #fff7ed; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #f59e0b; font-size: 14px; color: #0f172a;">
+                        <h3 style="margin-top: 0; color: #b45309; font-size: 16px; font-weight: 700;">₿ Send Cryptocurrency</h3>
+                        <?php if (!empty($siteSettings['crypto_btc_address'])): ?>
+                            <p style="margin: 8px 0 6px 0; color: #0f172a;"><strong>Bitcoin (BTC):</strong><br>
+                            <code style="background: #ffffff; color: #0f172a; padding: 6px 8px; border-radius: 4px; font-size: 13px; word-break: break-all; display: inline-block;"><?php echo htmlspecialchars($siteSettings['crypto_btc_address']); ?></code>
+                            <button type="button" class="copy-btn" onclick="copyText('<?php echo addslashes($siteSettings['crypto_btc_address']); ?>')">Copy</button></p>
+                        <?php endif; ?>
+                        <?php if (!empty($siteSettings['crypto_eth_address'])): ?>
+                            <p style="margin: 8px 0 6px 0; color: #0f172a;"><strong>Ethereum (ETH):</strong><br>
+                            <code style="background: #ffffff; color: #0f172a; padding: 6px 8px; border-radius: 4px; font-size: 13px; word-break: break-all; display: inline-block;"><?php echo htmlspecialchars($siteSettings['crypto_eth_address']); ?></code>
+                            <button type="button" class="copy-btn" onclick="copyText('<?php echo addslashes($siteSettings['crypto_eth_address']); ?>')">Copy</button></p>
+                        <?php endif; ?>
+                        <?php if (!empty($siteSettings['crypto_usdt_address'])): ?>
+                            <p style="margin: 8px 0 6px 0; color: #0f172a;"><strong>USDT (TRC20):</strong><br>
+                            <code style="background: #ffffff; color: #0f172a; padding: 6px 8px; border-radius: 4px; font-size: 13px; word-break: break-all; display: inline-block;"><?php echo htmlspecialchars($siteSettings['crypto_usdt_address']); ?></code>
+                            <button type="button" class="copy-btn" onclick="copyText('<?php echo addslashes($siteSettings['crypto_usdt_address']); ?>')">Copy</button></p>
+                        <?php endif; ?>
+                        <p style="margin: 10px 0 0 0; font-size: 13px; color: #0f172a; opacity: 0.9;">Send to the appropriate address above, then upload proof below.</p>
+                    </div>
+                    
+                    <div id="paymentDetailsBank" class="payment-details" style="display: none; background: #f8fafc; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #64748b; font-size: 14px; color: #0f172a;">
+                        <h3 style="margin-top: 0; color: #334155; font-size: 16px; font-weight: 700;">🏦 Bank Transfer</h3>
+                        <p style="margin: 6px 0; font-size: 13px; color: #0f172a; opacity: 0.9;">Contact support for bank transfer details.</p>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Reference Number (Optional)</label>
+                        <input type="text" name="reference_number" placeholder="Enter transaction reference number">
+                        <small style="color: #666;">You can provide reference number OR upload proof of payment below</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Proof of Payment (Screenshot/Photo)</label>
+                        <input type="file" name="proof_of_payment" accept="image/jpeg,image/jpg,image/png,image/webp">
+                        <small style="color: #666;">Upload a screenshot or photo of your payment confirmation</small>
+                    </div>
+                    
+                    <button type="submit" name="deposit" class="btn">Submit Deposit Request</button>
+                </form>
+                
+                <div style="margin-top: 20px; padding: 15px; background: rgba(99, 102, 241, 0.1); border-radius: 8px; border-left: 4px solid <?php echo $themeColor; ?>;">
+                    <strong>Note:</strong> Deposits are processed manually by admin. Upload proof of payment or reference number to speed up approval.
+                </div>
+            </div>
+            
+            <script>
+            // Lightweight copy-to-clipboard helper
+            function copyText(text) {
+                if (!text) return;
+                navigator.clipboard.writeText(text).then(() => {
+                    const msg = document.createElement('div');
+                    msg.textContent = 'Copied!';
+                    msg.style.position = 'fixed';
+                    msg.style.bottom = '20px';
+                    msg.style.right = '20px';
+                    msg.style.background = '#1e293b';
+                    msg.style.color = '#fff';
+                    msg.style.padding = '8px 12px';
+                    msg.style.border = '1px solid #334155';
+                    msg.style.borderRadius = '6px';
+                    msg.style.boxShadow = '0 6px 20px rgba(0,0,0,0.4)';
+                    msg.style.zIndex = '2000';
+                    document.body.appendChild(msg);
+                    setTimeout(() => msg.remove(), 1200);
+                });
+            }
+            
+            // Compact button style
+            (function() {
+                const style = document.createElement('style');
+                style.textContent = `.copy-btn{margin-left:8px;padding:4px 8px;border:1px solid #334155;border-radius:6px;background:#1e293b;color:#fff;font-size:12px;cursor:pointer} .copy-btn:hover{background:#334155}`;
+                document.head.appendChild(style);
+            })();
+            function showPaymentDetails(method) {
+                // Hide all payment details
+                document.querySelectorAll('.payment-details').forEach(el => el.style.display = 'none');
+                
+                // Map method to element IDs to avoid mismatches (e.g., paymaya → Maya)
+                const idMap = {
+                    gcash: 'paymentDetailsGcash',
+                    paymaya: 'paymentDetailsMaya',
+                    crypto: 'paymentDetailsCrypto',
+                    bank: 'paymentDetailsBank'
+                };
+                
+                const detailsId = idMap[method];
+                if (detailsId) {
+                    const detailsEl = document.getElementById(detailsId);
+                    if (detailsEl) {
+                        detailsEl.style.display = 'block';
+                    }
+                }
+            }
+            </script>
+        </div>
+        
+        <!-- Withdraw Tab -->
+        <div id="withdraw-tab" class="tab-content <?php echo $activeTab === 'withdraw' ? 'active' : ''; ?>">
+            <div class="card">
+                <h2 class="card-title">Withdraw Funds</h2>
+                <form method="POST" id="withdrawForm">
+                    <div class="form-group">
+                        <label>Amount (<?php echo $userCurrency; ?>)</label>
+                        <input type="number" name="amount" id="withdrawAmount" min="100" max="<?php echo $balance; ?>" step="0.01" required 
+                               placeholder="Minimum: <?php echo formatCurrency(100, $userCurrency); ?>, Available: <?php echo formatCurrency($balance, $userCurrency); ?>">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Withdrawal Method</label>
+                        <select name="method" id="withdrawMethod" required onchange="updateWithdrawInfo()">
+                            <?php if (in_array('bank', $allowedMethods)): ?>
+                                <option value="bank">Bank Transfer (15% fee)</option>
+                            <?php endif; ?>
+                            <?php if (in_array('gcash', $allowedMethods)): ?>
+                                <option value="gcash">GCash (Free)</option>
+                            <?php endif; ?>
+                            <?php if (in_array('paymaya', $allowedMethods)): ?>
+                                <option value="paymaya">PayMaya (Free)</option>
+                            <?php endif; ?>
+                            <?php if (in_array('crypto', $allowedMethods)): ?>
+                                <option value="crypto">Cryptocurrency (USDT only)</option>
+                            <?php endif; ?>
+                        </select>
+                    </div>
+                    <?php if (empty($allowedMethods)): ?>
+                        <div class="alert alert-error">No withdrawal methods are currently enabled. Please contact support.</div>
+                    <?php endif; ?>
+                    
+                    <div id="cryptoTypeField" class="form-group" style="display: none;">
+                        <label>USDT Network</label>
+                        <select name="crypto_network" id="cryptoNetwork">
+                            <option value="TRC20">TRC20 (Recommended)</option>
+                            <option value="BEP20">BEP20</option>
+                        </select>
+                        <small style="color: #94a3b8;">Only USDT is supported. Network fee: <?php echo formatCurrency(50, $userCurrency); ?>.</small>
+                    </div>
+        
+                    <div class="form-group" id="cryptoAddressField" style="display: none;">
+                        <label>USDT Wallet Address</label>
+                        <input type="text" name="crypto_address" id="cryptoAddress" autocomplete="off" placeholder="Paste your USDT address" required>
+                    </div>
+        
+                    <div class="form-group" id="accountDetailsField">
+                        <label id="accountLabel">Account Details</label>
+                        <textarea name="account" id="accountDetails" placeholder="Enter your bank account number, name, and details" required></textarea>
+                        <small id="accountHint" style="color: #94a3b8; display: none;">Must match your registered phone: <?php echo htmlspecialchars($currentUser['phone']); ?></small>
+                    </div>
+                    
+                    <div id="feeWarning" style="display: none; margin-bottom: 20px; padding: 15px; background: rgba(245, 158, 11, 0.1); border-radius: 8px; border-left: 4px solid #f59e0b;">
+                        <strong>⚠️ Bank Transfer Fee:</strong> <span id="feeAmount"></span>
+                    </div>
+                    
+                    <div id="networkFee" style="display: none; margin-bottom: 20px; padding: 15px; background: rgba(59, 130, 246, 0.12); border-radius: 8px; border-left: 4px solid #3b82f6;">
+                        <strong>🌐 USDT Network Fee:</strong> Flat <?php echo formatCurrency(50, $userCurrency); ?> for TRC20/BEP20.
+                    </div>
+                    
+                    <div id="freeInfo" style="display: none; margin-bottom: 20px; padding: 15px; background: rgba(34, 197, 94, 0.1); border-radius: 8px; border-left: 4px solid #22c55e;">
+                        <strong>✅ Free Withdrawal:</strong> No fees for GCash and PayMaya withdrawals
+                    </div>
+                    
+                    <button type="submit" name="withdraw" class="btn">Submit Withdrawal Request</button>
+                </form>
+                
+                <div style="margin-top: 20px; padding: 15px; background: rgba(99, 102, 241, 0.1); border-radius: 8px; border-left: 4px solid <?php echo $themeColor; ?>;">
+                    <strong>Important Notes:</strong>
+                    <ul style="margin: 10px 0 0 20px; color: #94a3b8;">
+                        <li>Minimum withdrawal: <?php echo formatCurrency(100, $userCurrency); ?></li>
+                        <li>Bank transfers incur a 15% processing fee</li>
+                        <li>GCash and PayMaya withdrawals are free but must use your registered phone number</li>
+                        <li>Crypto (USDT only): TRC20 or BEP20, flat <?php echo formatCurrency(50, $userCurrency); ?> network fee</li>
+                        <li>Withdrawals are processed within 24-48 hours</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <!-- History Tab -->
+        <div id="history-tab" class="tab-content <?php echo $activeTab === 'history' ? 'active' : ''; ?>">
+            <div class="card">
+                <h2 class="card-title">Transaction History</h2>
+                <div style="overflow-x: auto;">
+                    <table class="transaction-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Type</th>
+                                <th>Amount</th>
+                                <th>Status</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if (empty($transactions)): ?>
+                                <tr>
+                                    <td colspan="5" style="text-align: center; color: #94a3b8; padding: 40px;">
+                                        No transactions yet
+                                    </td>
+                                </tr>
+                            <?php else: ?>
+                                <?php foreach ($transactions as $tx): ?>
+                                    <tr>
+                                        <td><?php echo date('M d, Y H:i', strtotime($tx['created_at'])); ?></td>
+                                        <td>
+                                            <span class="type-badge type-<?php echo $tx['type']; ?>">
+                                                <?php echo ucfirst($tx['type']); ?>
+                                            </span>
+                                        </td>
+                                        <td class="<?php echo in_array($tx['type'], ['deposit', 'win']) ? 'amount-positive' : 'amount-negative'; ?>">
+                                            <?php 
+                                            $sign = in_array($tx['type'], ['deposit', 'win']) ? '+' : '-';
+                                            echo $sign . formatCurrency($tx['amount'], $userCurrency); 
+                                            ?>
+                                        </td>
+                                        <td>
+                                            <?php 
+                                            $status = $tx['status'] ?? 'completed';
+                                            ?>
+                                            <span class="status-badge status-<?php echo $status; ?>">
+                                                <?php echo ucfirst($status); ?>
+                                            </span>
+                                        </td>
+                                        <td style="color: #94a3b8;">
+                                            <?php echo htmlspecialchars($tx['description'] ?? '-'); ?>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const savedPrefs = <?php echo json_encode([
+            'bank' => $withdrawPrefs['bank']['account'] ?? '',
+            'gcash' => $withdrawPrefs['gcash']['account'] ?? $currentUser['phone'] ?? '',
+            'paymaya' => $withdrawPrefs['paymaya']['account'] ?? $currentUser['phone'] ?? '',
+            'crypto' => [
+                'account' => $withdrawPrefs['crypto']['account'] ?? '',
+                'network' => $withdrawPrefs['crypto']['network'] ?? 'TRC20'
+            ]
+        ], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
+        const userPhone = '<?php echo htmlspecialchars($currentUser['phone'], ENT_QUOTES); ?>';
+
+        function showTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Deactivate all tab buttons
+            document.querySelectorAll('.tab').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById(tabName + '-tab').classList.add('active');
+            
+            // Activate clicked button
+            event.target.classList.add('active');
+        }
+        
+        function updateWithdrawInfo() {
+            const method = document.getElementById('withdrawMethod').value;
+            const amount = parseFloat(document.getElementById('withdrawAmount').value) || 0;
+            const cryptoField = document.getElementById('cryptoTypeField');
+            const accountHint = document.getElementById('accountHint');
+            const accountLabel = document.getElementById('accountLabel');
+            const feeWarning = document.getElementById('feeWarning');
+            const networkFee = document.getElementById('networkFee');
+            const freeInfo = document.getElementById('freeInfo');
+            const accountDetails = document.getElementById('accountDetails');
+            const cryptoNetwork = document.getElementById('cryptoNetwork');
+            const cryptoAddressField = document.getElementById('cryptoAddressField');
+            const cryptoAddress = document.getElementById('cryptoAddress');
+            const accountDetailsField = document.getElementById('accountDetailsField');
+            
+            // Reset displays
+            cryptoField.style.display = 'none';
+            cryptoAddressField.style.display = 'none';
+            accountDetailsField.style.display = 'block';
+            accountHint.style.display = 'none';
+            feeWarning.style.display = 'none';
+            freeInfo.style.display = 'none';
+            networkFee.style.display = 'none';
+            accountDetails.readOnly = false;
+            cryptoAddress.value = '';
+            accountDetails.required = true;
+            cryptoAddress.required = false;
+            
+            if (method === 'bank') {
+                accountLabel.textContent = 'Bank Account Details';
+                accountDetails.placeholder = 'Enter your bank name, account number, account name';
+                accountDetails.value = savedPrefs.bank || '';
+                if (amount > 0) {
+                    const fee = amount * 0.15;
+                    const total = amount + fee;
+                    document.getElementById('feeAmount').textContent = 
+                        'A 15% fee of <?php echo $userCurrency; ?> ' + fee.toFixed(2) + 
+                        ' will be deducted. Total: <?php echo $userCurrency; ?> ' + total.toFixed(2);
+                    feeWarning.style.display = 'block';
+                }
+            } else if (method === 'gcash' || method === 'paymaya') {
+                accountLabel.textContent = (method === 'gcash' ? 'GCash' : 'PayMaya') + ' Number';
+                accountDetails.placeholder = 'Enter your ' + (method === 'gcash' ? 'GCash' : 'PayMaya') + ' mobile number';
+                accountHint.style.display = 'block';
+                freeInfo.style.display = 'block';
+                accountDetails.readOnly = true;
+                accountDetails.value = userPhone;
+            } else if (method === 'crypto') {
+                accountLabel.textContent = 'USDT Wallet Address';
+                accountDetailsField.style.display = 'none';
+                cryptoField.style.display = 'block';
+                cryptoAddressField.style.display = 'block';
+                networkFee.style.display = 'block';
+                cryptoAddress.value = savedPrefs.crypto.account || '';
+                if (savedPrefs.crypto.network) {
+                    cryptoNetwork.value = savedPrefs.crypto.network;
+                }
+                accountDetails.required = false;
+                cryptoAddress.required = true;
+            }
+        }
+        
+        // Update fee calculation when amount changes
+        document.addEventListener('DOMContentLoaded', function() {
+            const amountInput = document.getElementById('withdrawAmount');
+            if (amountInput) {
+                amountInput.addEventListener('input', updateWithdrawInfo);
+            }
+            // Initialize on page load
+            updateWithdrawInfo();
+        });
+        
+        // Toggle balance dropdown
+        function toggleBalanceDropdown() {
+            const dropdown = document.getElementById('balance-dropdown');
+            dropdown.classList.toggle('active');
+        }
+        
+        // Close dropdowns when clicking outside
+        document.addEventListener('click', function(event) {
+            const balanceWrapper = document.querySelector('.balance-wrapper');
+            const balanceDropdown = document.getElementById('balance-dropdown');
+            
+            // Close balance dropdown if clicking outside
+            if (balanceWrapper && balanceDropdown && !balanceWrapper.contains(event.target)) {
+                balanceDropdown.classList.remove('active');
+            }
+        });
+    </script>
+    
+    <?php
+    // Load footer scripts from settings
+    if (!empty($siteSettings['footer_scripts'])) {
+        echo $siteSettings['footer_scripts'];
+    }
+    ?>
+</body>
+</html>

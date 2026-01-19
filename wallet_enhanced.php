@@ -24,17 +24,6 @@ $themeColor = $siteSettings['theme_color'] ?? '#6366f1';
 
 $userModel = new User();
 $currentUser = $userModel->getById($_SESSION['user_id']);
-
-// Check if user is banned or suspended
-if (isset($currentUser['status']) && in_array($currentUser['status'], ['banned', 'suspended'])) {
-    session_unset();
-    session_destroy();
-    session_start();
-    $_SESSION['error'] = 'Your account has been ' . $currentUser['status'] . '. Please contact support.';
-    header('Location: login.php');
-    exit;
-}
-
 $balance = $userModel->getBalance($_SESSION['user_id']);
 $userCurrency = $currentUser['currency'] ?? 'PHP';
 $username = $currentUser['username'] ?? '';
@@ -43,11 +32,9 @@ $phoneDisplay = $userModel->formatPhoneDisplay($currentUser['phone'] ?? '');
 $db = Database::getInstance();
 $pdo = $db->getConnection();
 
-$error = $_SESSION['error'] ?? '';
-$success = $_SESSION['success'] ?? '';
-$paymentUrl = $_SESSION['payment_url'] ?? '';
-// Clear one-time messages to avoid repeat banners
-unset($_SESSION['success'], $_SESSION['error'], $_SESSION['payment_url']);
+$error = '';
+$success = '';
+$paymentUrl = '';
 
 // Handle Auto Deposit
 if (isset($_POST['auto_deposit'])) {
@@ -66,15 +53,10 @@ if (isset($_POST['auto_deposit'])) {
         
         if ($result['success']) {
             $paymentUrl = $result['payment_url'] ?? null;
-
+            $success = "Deposit created! Redirecting to payment...";
+            
             if ($paymentUrl) {
-                // Persist URL and redirect immediately to payment page; fallback link still shown on return
-                $_SESSION['payment_url'] = $paymentUrl;
-                $_SESSION['success'] = $result['message'] ?? 'Deposit created successfully!';
-                header("Location: $paymentUrl");
-                exit;
-            } else {
-                $success = $result['message'] ?? 'Deposit created successfully!';
+                echo "<script>setTimeout(() => { window.location.href = '$paymentUrl'; }, 1500);</script>";
             }
         } else {
             $error = $result['error'] ?? 'Deposit failed';
@@ -111,10 +93,8 @@ if (isset($_POST['auto_withdrawal'])) {
         $result = $wpay->createPayOut($_SESSION['user_id'], $amount, $payType, $account, $accountName);
         
         if ($result['success']) {
-            // Use PRG to avoid duplicate submissions on refresh
-            $_SESSION['success'] = $result['message'] ?? 'Withdrawal submitted successfully!';
-            header('Location: wallet.php?tab=withdrawal');
-            exit;
+            $success = $result['message'] ?? 'Withdrawal submitted successfully!';
+            $balance = $userModel->getBalance($_SESSION['user_id']);
         } else {
             $error = $result['error'] ?? 'Withdrawal failed';
         }
@@ -212,26 +192,6 @@ $canWithdraw = $totalWagered >= $totalRequiredWager;
 
 // Get active tab from URL parameter
 $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'deposit';
-
-// Derive a status message for recent withdrawals if none set
-if ($activeTab === 'withdrawal' && empty($success)) {
-    $recentWithdrawal = null;
-    foreach ($transactions as $tx) {
-        if (($tx['type'] ?? '') === 'withdrawal' && in_array(strtolower($tx['status'] ?? ''), ['pending','processing'])) {
-            // Within last 10 minutes
-            $created = strtotime($tx['created_at'] ?? '');
-            if ($created && (time() - $created) <= 600) {
-                $recentWithdrawal = $tx;
-                break;
-            }
-        }
-    }
-    if ($recentWithdrawal) {
-        $statusWord = ucfirst(strtolower($recentWithdrawal['status']));
-        $desc = $recentWithdrawal['description'] ?? '';
-        $success = "Withdrawal $statusWord. $desc";
-    }
-}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1129,16 +1089,8 @@ if ($activeTab === 'withdrawal' && empty($success)) {
                     <strong>Min Amount:</strong> ₱<?php echo number_format(WPAY_MIN_DEPOSIT); ?> | 
                     <strong>Max Amount:</strong> ₱<?php echo number_format(WPAY_MAX_DEPOSIT); ?>
                 </div>
-
-                <?php if (!empty($paymentUrl)): ?>
-                    <div class="alert alert-info" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
-                        <span>Deposit created. If you were not redirected, click below to continue.</span>
-                        <a href="<?php echo htmlspecialchars($paymentUrl); ?>" target="_blank" rel="noopener" class="btn" style="width: auto; padding: 12px 18px; text-decoration: none;">Open Payment Page</a>
-                    </div>
-                <?php endif; ?>
                 
-                <form method="POST" action="https://paldo88.site/wallet.php?tab=deposit" id="depositForm">
-                    <input type="hidden" name="auto_deposit" value="1">
+                <form method="POST" id="depositForm">
                     <div class="form-group">
                         <label>Amount</label>
                         <input type="number" name="amount" id="depositAmount" placeholder="Enter amount" required min="<?php echo WPAY_MIN_DEPOSIT; ?>" max="<?php echo WPAY_MAX_DEPOSIT; ?>" step="0.01">
@@ -1172,7 +1124,7 @@ if ($activeTab === 'withdrawal' && empty($success)) {
                         </div>
                     </div>
                     
-                    <button type="submit" class="btn">
+                    <button type="submit" name="auto_deposit" class="btn">
                         Proceed to Payment →
                     </button>
                 </form>
@@ -1247,7 +1199,7 @@ if ($activeTab === 'withdrawal' && empty($success)) {
                     ⚠️ <strong>Account Number:</strong> Withdrawals will be sent to your registered phone number (<?php echo htmlspecialchars($currentUser['phone'] ?? 'Not set'); ?>). To change your withdrawal account, please contact support.
                 </div>
                 
-                <form method="POST" action="https://paldo88.site/wallet.php?tab=withdrawal" id="withdrawalForm">
+                <form method="POST" id="withdrawalForm" action="">
                     <input type="hidden" name="confirmed" id="withdrawalConfirmed" value="0">
                     <div class="form-group">
                         <label>Amount (Available: ₱<?php echo number_format($balance, 2); ?>)</label>
@@ -1404,17 +1356,11 @@ if ($activeTab === 'withdrawal' && empty($success)) {
             });
         });
         
-        // Deposit form validation + double-submit guard
+        // Deposit form validation
         document.getElementById('depositForm').addEventListener('submit', function(e) {
             const amount = parseFloat(document.getElementById('depositAmount').value);
             const minDeposit = <?php echo WPAY_MIN_DEPOSIT; ?>;
             const maxDeposit = <?php echo WPAY_MAX_DEPOSIT; ?>;
-            
-            if (isNaN(amount) || amount <= 0) {
-                e.preventDefault();
-                alert('Please enter a valid amount');
-                return false;
-            }
             
             if (amount < minDeposit) {
                 e.preventDefault();
@@ -1428,21 +1374,12 @@ if ($activeTab === 'withdrawal' && empty($success)) {
                 return false;
             }
             
-            const payType = document.querySelector('#depositForm input[name="pay_type"]:checked');
+            const payType = document.querySelector('input[name="pay_type"]:checked');
             if (!payType) {
                 e.preventDefault();
                 alert('Please select a payment method');
                 return false;
             }
-
-            // Validation passed, allow form submission
-            // Disable submit button to prevent double click
-            const btn = this.querySelector('button[type="submit"]');
-            if (btn) {
-                btn.disabled = true;
-                btn.textContent = 'Processing…';
-            }
-            return true;
         });
         
         // Custom withdrawal confirmation modal
@@ -1454,12 +1391,6 @@ if ($activeTab === 'withdrawal' && empty($success)) {
             modal.classList.add('active');
             
             document.getElementById('confirmWithdrawal').onclick = function() {
-                // Prevent double submit
-                if (this.dataset.submitting === '1') return;
-                this.dataset.submitting = '1';
-                this.disabled = true;
-                this.textContent = 'Submitting…';
-                document.getElementById('cancelWithdrawal').disabled = true;
                 modal.classList.remove('active');
                 // Set confirmed flag and submit
                 document.getElementById('withdrawalConfirmed').value = '1';

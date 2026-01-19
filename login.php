@@ -3,12 +3,17 @@ require_once 'session_config.php';
 require_once 'config.php';
 require_once 'db_helper.php';
 require_once 'settings_helper.php';
+require_once 'csrf_helper.php';
+require_once 'recaptcha_config.php';
 
 // Load site settings
 $casinoName = SiteSettings::get('casino_name', 'Casino PHP');
 $casinoTagline = SiteSettings::get('casino_tagline', 'Play & Win Big!');
 
 $user = new User();
+
+// Generate CSRF token for forms
+CSRF::generateToken();
 
 // Handle success/error messages from session
 $error = isset($_SESSION['error']) ? $_SESSION['error'] : '';
@@ -17,14 +22,38 @@ unset($_SESSION['error'], $_SESSION['success']);
 
 // Handle Login
 if (isset($_POST['login'])) {
-    $phoneOrUsername = $_POST['phone'];
-    $password = $_POST['password'];
+    // Verify CSRF token - STRICT
+    if (!isset($_POST['csrf_token']) || !CSRF::validateToken($_POST['csrf_token'])) {
+        CSRF::regenerateToken();
+        $_SESSION['error'] = 'Session expired. Please refresh and try again.';
+        header('Location: login.php');
+        exit;
+    }
     
-    // Get user IP address
+    // Get user IP address early (used in logs)
     $ip = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
     if (isset($_SERVER['HTTP_X_FORWARDED_FOR'])) {
         $ipList = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
         $ip = trim($ipList[0]);
+    }
+
+    // Verify reCAPTCHA token (if present) - NON-BLOCKING
+    // Token gathering is async, so it might not be present immediately
+    // If present, validate it; if missing, log but continue (allows testing without reCAPTCHA)
+    if (!empty($_POST['recaptcha_token'] ?? '')) {
+        if (!RecaptchaVerifier::verify($_POST['recaptcha_token'], 'login')) {
+            error_log("reCAPTCHA verification failed for login attempt from IP: {$ip}");
+            // Don't block login, just log the suspicious activity
+        }
+    }
+    
+    $phoneOrUsername = $_POST['phone'] ?? '';
+    $password = $_POST['password'] ?? '';
+    
+    if (empty($phoneOrUsername) || empty($password)) {
+        $_SESSION['error'] = 'Phone/username and password are required.';
+        header('Location: login.php');
+        exit;
     }
     
     $db = Database::getInstance();
@@ -41,38 +70,9 @@ if (isset($_POST['login'])) {
     $stmt->execute([$ip, $today]);
     $attemptCount = $stmt->fetchColumn();
     
-    if ($attemptCount >= 10) {
+    if ($attemptCount >= 3) {
         $_SESSION['error'] = 'Too many failed login attempts. Please try again tomorrow.';
         header('Location: login.php');
-        exit;
-    }
-    
-    // First check if user exists
-    $normalizedPhone = $phoneOrUsername;
-    if (preg_match('/^[0-9+]/', $phoneOrUsername)) {
-        // Normalize phone if input looks like a phone number
-        $normalizedPhone = preg_replace('/[^0-9+]/', '', $phoneOrUsername);
-        if (substr($normalizedPhone, 0, 1) == '0') {
-            $normalizedPhone = '+639' . substr($normalizedPhone, 1);
-        } elseif (substr($normalizedPhone, 0, 1) == '9') {
-            $normalizedPhone = '+639' . $normalizedPhone;
-        } elseif (substr($normalizedPhone, 0, 4) != '+639') {
-            $normalizedPhone = '+639' . $normalizedPhone;
-        }
-    }
-    
-    $stmt = $pdo->prepare("
-        SELECT * FROM users 
-        WHERE (username = ? OR phone = ? OR phone = ?) AND status = 'active'
-    ");
-    $stmt->execute([$phoneOrUsername, $phoneOrUsername, $normalizedPhone]);
-    $existingUser = $stmt->fetch();
-    
-    if (!$existingUser) {
-        // Phone number not registered - redirect to registration with pre-filled phone
-        $_SESSION['reg_phone'] = $phoneOrUsername;
-        $_SESSION['error'] = 'Phone number not registered. Please register first.';
-        header('Location: login.php#register');
         exit;
     }
     
@@ -134,6 +134,77 @@ if (isset($_POST['login'])) {
         // Store session ID for logout tracking
         $_SESSION['login_history_id'] = $pdo->lastInsertId();
         
+        // Device fingerprinting - Check for suspicious login patterns
+        $suspiciousLogin = false;
+        $suspiciousReasons = [];
+        
+        // Check 1: Multiple IPs in short time (different IP within last hour)
+        $stmt = $pdo->prepare("
+            SELECT COUNT(DISTINCT ip_address) as ip_count 
+            FROM login_history 
+            WHERE user_id = ? 
+            AND login_time >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+        ");
+        $stmt->execute([$loggedUser['id']]);
+        $ipCount = $stmt->fetchColumn();
+        
+        if ($ipCount > 2) {
+            $suspiciousLogin = true;
+            $suspiciousReasons[] = 'Multiple IPs detected';
+        }
+        
+        // Check 2: Different device type than usual
+        $stmt = $pdo->prepare("
+            SELECT device, COUNT(*) as count 
+            FROM login_history 
+            WHERE user_id = ? 
+            GROUP BY device 
+            ORDER BY count DESC 
+            LIMIT 1
+        ");
+        $stmt->execute([$loggedUser['id']]);
+        $usualDevice = $stmt->fetch();
+        
+        if ($usualDevice && $usualDevice['device'] !== $device && $usualDevice['count'] > 5) {
+            $suspiciousLogin = true;
+            $suspiciousReasons[] = 'Unusual device type';
+        }
+        
+        // Check 3: Rapid login attempts from different locations
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) as count 
+            FROM login_history 
+            WHERE user_id = ? 
+            AND login_time >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+        ");
+        $stmt->execute([$loggedUser['id']]);
+        $recentLogins = $stmt->fetchColumn();
+        
+        if ($recentLogins > 3) {
+            $suspiciousLogin = true;
+            $suspiciousReasons[] = 'Rapid login attempts';
+        }
+        
+        // Log suspicious activity
+        if ($suspiciousLogin) {
+            $stmt = $pdo->prepare("
+                INSERT INTO suspicious_logins 
+                (user_id, ip_address, device, browser, os, reasons, detected_at) 
+                VALUES (?, ?, ?, ?, ?, ?, NOW())
+            ");
+            $stmt->execute([
+                $loggedUser['id'], 
+                $ip, 
+                $device, 
+                $browser, 
+                $os, 
+                implode(', ', $suspiciousReasons)
+            ]);
+            
+            // Set warning flag in session
+            $_SESSION['suspicious_login_warning'] = true;
+        }
+        
         // Warm up Redis cache with user data for fast access
         require_once 'redis_helper.php';
         $cache = RedisCache::getInstance();
@@ -142,12 +213,66 @@ if (isset($_POST['login'])) {
         header('Location: index.php');
         exit;
     } else {
-        // Record failed login attempt
+        // Login failed - check if user exists to give appropriate error message
+        $normalizedPhone = $phoneOrUsername;
+        if (preg_match('/^[0-9+]/', $phoneOrUsername)) {
+            // Normalize phone if input looks like a phone number
+            $normalizedPhone = preg_replace('/[^0-9+]/', '', $phoneOrUsername);
+            
+            // Philippine format: 09XXXXXXXXX (11 digits) -> +639XXXXXXXXX
+            if (substr($normalizedPhone, 0, 2) == '09' && strlen($normalizedPhone) == 11) {
+                // Remove '0', keep '9XXXXXXXXX', add '+63'
+                $normalizedPhone = '+63' . substr($normalizedPhone, 1);
+            } elseif (substr($normalizedPhone, 0, 1) == '9' && strlen($normalizedPhone) == 10) {
+                // Format: 9XXXXXXXXX -> +639XXXXXXXXX
+                $normalizedPhone = '+639' . $normalizedPhone;
+            } elseif (substr($normalizedPhone, 0, 4) != '+639' && substr($normalizedPhone, 0, 3) == '+63') {
+                // Already has +63, keep as is
+                $normalizedPhone = $normalizedPhone;
+            } elseif (substr($normalizedPhone, 0, 4) != '+639') {
+                // Fallback: add +639 prefix
+                $normalizedPhone = '+639' . $normalizedPhone;
+            }
+        }
+        
+        // First check if user exists at all (regardless of status)
         $stmt = $pdo->prepare("
-            INSERT INTO login_attempts (ip_address, username_or_phone, attempt_time)
-            VALUES (?, ?, NOW())
+            SELECT status FROM users 
+            WHERE (username = ? OR phone = ? OR phone = ?)
         ");
-        $stmt->execute([$ip, $phoneOrUsername]);
+        $stmt->execute([$phoneOrUsername, $phoneOrUsername, $normalizedPhone]);
+        $existingUser = $stmt->fetch();
+        
+        if ($existingUser) {
+            // User exists - check their status
+            if ($existingUser['status'] === 'banned') {
+                $_SESSION['error'] = 'Your account has been banned. Please contact support.';
+                header('Location: login.php');
+                exit;
+            } elseif ($existingUser['status'] === 'suspended') {
+                $_SESSION['error'] = 'Your account has been suspended. Please contact support.';
+                header('Location: login.php');
+                exit;
+            }
+            // Status is 'active' but wrong password - will be caught below
+        } elseif (preg_match('/^[0-9+]/', $phoneOrUsername)) {
+            // Phone number format but user doesn't exist - redirect to registration
+            $_SESSION['reg_phone'] = $phoneOrUsername;
+            $_SESSION['error'] = 'Phone number not registered. Please register first.';
+            header('Location: login.php#register');
+            exit;
+        }
+        
+        // Record failed login attempt
+        try {
+            $stmt = $pdo->prepare("
+                INSERT INTO login_attempts (ip_address, username_or_phone, attempt_time)
+                VALUES (?, ?, NOW())
+            ");
+            $stmt->execute([$ip, $phoneOrUsername]);
+        } catch (Exception $e) {
+            error_log("Failed to insert login attempt: " . $e->getMessage());
+        }
         
         // Count today's attempts
         $today = date('Y-m-d');
@@ -160,7 +285,7 @@ if (isset($_POST['login'])) {
         $stmt->execute([$ip, $today]);
         $attemptCount = $stmt->fetchColumn();
         
-        $remainingAttempts = 10 - $attemptCount;
+        $remainingAttempts = 3 - $attemptCount;
         
         if ($remainingAttempts <= 0) {
             $_SESSION['error'] = 'Too many failed login attempts. Your IP is now blocked until tomorrow.';
@@ -177,9 +302,33 @@ if (isset($_POST['login'])) {
 
 // Handle Registration
 if (isset($_POST['register'])) {
-    $phone = $_POST['reg_phone'];
-    $password = $_POST['reg_password'];
-    $confirmPassword = $_POST['reg_confirm_password'];
+    // Verify CSRF token - STRICT
+    if (!isset($_POST['csrf_token']) || !CSRF::validateToken($_POST['csrf_token'])) {
+        CSRF::regenerateToken();
+        $_SESSION['error'] = 'Session expired. Please refresh and try again.';
+        header('Location: login.php#register');
+        exit;
+    }
+    
+    // Verify reCAPTCHA token (if present) - NON-BLOCKING
+    // Token gathering is async, so it might not be present immediately
+    // If present, validate it; if missing, log but continue (allows testing without reCAPTCHA)
+    if (!empty($_POST['recaptcha_token'] ?? '')) {
+        if (!RecaptchaVerifier::verify($_POST['recaptcha_token'], 'register')) {
+            error_log("reCAPTCHA verification failed for registration attempt from IP: {$ip}");
+            // Don't block registration, just log the suspicious activity
+        }
+    }
+    
+    $phone = $_POST['reg_phone'] ?? '';
+    $password = $_POST['reg_password'] ?? '';
+    $confirmPassword = $_POST['reg_confirm_password'] ?? '';
+    
+    if (empty($phone) || empty($password) || empty($confirmPassword)) {
+        $_SESSION['error'] = 'All fields are required.';
+        header('Location: login.php#register');
+        exit;
+    }
     
     // Get user IP address
     $ip = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
@@ -191,12 +340,12 @@ if (isset($_POST['register'])) {
     $db = Database::getInstance();
     $pdo = $db->getConnection();
     
-    // Check IP registration limit (max 3 accounts per IP)
+    // Check IP registration limit (max 1 account per IP)
     $stmt = $pdo->prepare("SELECT registration_count FROM ip_registrations WHERE ip_address = ?");
     $stmt->execute([$ip]);
     $ipData = $stmt->fetch();
     
-    if ($ipData && $ipData['registration_count'] >= 3) {
+    if ($ipData && $ipData['registration_count'] >= 1) {
         $_SESSION['error'] = 'Maximum registration limit reached from this IP address. Contact support if you need help.';
         header('Location: login.php');
         exit;
@@ -259,6 +408,10 @@ if (isset($_POST['register'])) {
     <meta name="theme-color" content="#6366f1">
     <title><?php echo htmlspecialchars($casinoName); ?> - Login</title>
     <link rel="manifest" href="manifest.json">
+    
+    <!-- Google reCAPTCHA v3 -->
+    <script src="https://www.google.com/recaptcha/api.js?render=<?php echo RECAPTCHA_SITE_KEY; ?>"></script>
+    
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
@@ -570,7 +723,9 @@ if (isset($_POST['register'])) {
         
         <!-- Login Form -->
         <div id="login-form" class="form-container active">
-            <form method="POST">
+            <form method="POST" id="loginForm">
+                <?php echo CSRF::getTokenField(); ?>
+                <input type="hidden" name="recaptcha_token" id="loginRecaptchaToken">
                 <div class="form-group">
                     <label>Phone Number or Username</label>
                     <input type="text" name="phone" required placeholder="09XXXXXXXXX or username" 
@@ -589,7 +744,9 @@ if (isset($_POST['register'])) {
         
         <!-- Register Form -->
         <div id="register-form" class="form-container">
-            <form method="POST">
+            <form method="POST" id="registerForm">
+                <?php echo CSRF::getTokenField(); ?>
+                <input type="hidden" name="recaptcha_token" id="registerRecaptchaToken">
                 <div class="form-group">
                     <label>Phone Number 🇵🇭</label>
                     <input type="tel" name="reg_phone" required placeholder="09XXXXXXXXX" 
@@ -666,14 +823,52 @@ if (isset($_POST['register'])) {
                 });
             });
             
-            // Detect user location and set country code
-            fetch('https://ipapi.co/json/')
-                .then(res => res.json())
-                .then(data => {
-                    console.log('User location:', data.country_name);
-                    // You can use data.country_code to change default prefix
-                })
-                .catch(err => console.log('Location detection failed'));
+            // Detect user location and set country code (optional, non-blocking)
+            // Location detection can fail - that's okay, it's not critical
+            
+            // Background async reCAPTCHA token gathering
+            // This loads after user submission, doesn't block form
+            function generateRecaptchaToken(action) {
+                if (typeof grecaptcha === 'undefined') {
+                    console.warn('reCAPTCHA not yet loaded, token will be empty');
+                    return;
+                }
+                
+                grecaptcha.ready(function() {
+                    grecaptcha.execute('<?php echo RECAPTCHA_SITE_KEY; ?>', {action: action}).then(function(token) {
+                        if (action === 'login') {
+                            const field = document.getElementById('loginRecaptchaToken');
+                            if (field) field.value = token;
+                        } else if (action === 'register') {
+                            const field = document.getElementById('registerRecaptchaToken');
+                            if (field) field.value = token;
+                        }
+                    });
+                });
+            }
+            
+            // Generate tokens asynchronously after forms load
+            // These run in background and don't block form submission
+            setTimeout(() => generateRecaptchaToken('login'), 500);
+            setTimeout(() => generateRecaptchaToken('register'), 1000);
+            
+            // Forms submit normally without waiting for reCAPTCHA
+            const loginForm = document.getElementById('loginForm');
+            const registerForm = document.getElementById('registerForm');
+            
+            if (loginForm) {
+                loginForm.addEventListener('submit', function(e) {
+                    // Token gathering happens in background, allow form to submit
+                    // If token is not ready, server will log but still process login
+                });
+            }
+            
+            if (registerForm) {
+                registerForm.addEventListener('submit', function(e) {
+                    // Token gathering happens in background, allow form to submit
+                    // If token is not ready, server will log but still process registration
+                });
+            }
         });
     </script>
 </body>

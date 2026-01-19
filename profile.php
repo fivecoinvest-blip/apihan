@@ -62,6 +62,7 @@ if (isset($_POST['update_profile'])) {
     exit;
 }
 
+
 // Handle password change
 if (isset($_POST['change_password'])) {
     $currentPassword = $_POST['current_password'];
@@ -234,6 +235,7 @@ $loginHistory = $stmt->fetchAll(PDO::FETCH_ASSOC);
             background: linear-gradient(90deg, transparent, #334155 20%, #334155 80%, transparent);
             margin: 6px 0;
         }
+
         
 
         
@@ -641,15 +643,15 @@ $loginHistory = $stmt->fetchAll(PDO::FETCH_ASSOC);
         <div class="user-info">
             <div class="balance-wrapper">
                 <div class="balance" id="balance-trigger" onclick="toggleBalanceDropdown()">
-                    💰 <?php echo formatCurrency($balance, $userCurrency); ?>
+                    <img width="20" height="20" src="https://img.icons8.com/3d-fluency/94/coin-wallet.png" alt="balance" style="vertical-align: middle; margin-right: 6px;"/> 
+                    <?php echo formatCurrency($balance, $userCurrency); ?>
                 </div>
                 <div class="balance-dropdown" id="balance-dropdown">
-                    <a href="wallet.php?tab=deposit">
-                        <span>Deposit</span>
+                    <a href="wallet.php?tab=deposit" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600;">
+                        <span>⚡ Auto Deposit</span>
                     </a>
-                    <div class="balance-dropdown-divider"></div>
-                    <a href="wallet.php?tab=withdraw">
-                        <span>Withdraw</span>
+                    <a href="wallet.php?tab=withdrawal" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; font-weight: 600;">
+                        <span>⚡ Auto Withdrawal</span>
                     </a>
                     <div class="balance-dropdown-divider"></div>
                     <a href="profile.php">

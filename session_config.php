@@ -6,11 +6,11 @@
 
 // Start session with custom settings
 if (session_status() === PHP_SESSION_NONE) {
-    // Set session to last 4 hours (14400 seconds)
-    ini_set('session.gc_maxlifetime', 14400);
+    // Set session to last 24 hours (86400 seconds)
+    ini_set('session.gc_maxlifetime', 86400);
     
-    // Set session cookie to expire when browser closes (0) or after 4 hours
-    ini_set('session.cookie_lifetime', 14400);
+    // Set session cookie to expire after 24 hours
+    ini_set('session.cookie_lifetime', 86400);
     
     // Ensure session cookies are sent over HTTPS only (if using SSL)
     // Set to 0 for HTTP, 1 for HTTPS
@@ -30,6 +30,25 @@ if (session_status() === PHP_SESSION_NONE) {
     // Start the session
     session_start();
     
+    // Check session timeout (24 hours of inactivity)
+    if (isset($_SESSION['user_id'])) {
+        $timeout = 86400; // 24 hours in seconds
+        
+        if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity'] > $timeout)) {
+            // Session expired - logout user
+            session_unset();
+            session_destroy();
+            
+            // Redirect to login with timeout message
+            if (!headers_sent()) {
+                session_start();
+                $_SESSION['error'] = 'Your session has expired due to inactivity. Please login again.';
+                header('Location: /login.php');
+                exit;
+            }
+        }
+    }
+    
     // Regenerate session ID periodically (every 30 minutes) to prevent fixation
     if (!isset($_SESSION['last_regeneration'])) {
         $_SESSION['last_regeneration'] = time();
@@ -43,11 +62,11 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 /**
- * Check if session has expired (4 hours of inactivity)
+ * Check if session has expired (24 hours of inactivity)
  * Call this function at the start of protected pages
  */
 function check_session_timeout() {
-    $timeout = 14400; // 4 hours in seconds
+    $timeout = 86400; // 24 hours in seconds
     
     if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity'] > $timeout)) {
         // Session expired
@@ -71,5 +90,24 @@ function keep_session_alive() {
         return ['success' => true, 'message' => 'Session refreshed'];
     }
     return ['success' => false, 'message' => 'Not logged in'];
+}
+
+/**
+ * Check if user account is banned or suspended
+ * Call this on protected pages after verifying session
+ */
+function check_user_status($userId, $pdo) {
+    $stmt = $pdo->prepare("SELECT status FROM users WHERE id = ?");
+    $stmt->execute([$userId]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($user && in_array($user['status'], ['banned', 'suspended'])) {
+        session_unset();
+        session_destroy();
+        session_start();
+        $_SESSION['error'] = 'Your account has been ' . $user['status'] . '. Please contact support.';
+        header('Location: login.php');
+        exit;
+    }
 }
 ?>
